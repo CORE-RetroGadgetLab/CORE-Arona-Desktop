@@ -85,7 +85,11 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     key('rightIK', frame, id, [right.x, right.y, 0]);
 
     const cycle = Math.sin(TAU * phase);
-    const doubleStep = Math.cos(2 * TAU * phase);
+    // Lowest during load acceptance (middle of double support), highest
+    // at midstance. Keep the pelvis slightly below the straight-leg pose
+    // so IK can flex the knees instead of reaching above its rest height.
+    const supportPhase = phase - (WALK_STANCE - 0.5) / 2;
+    const doubleStep = Math.cos(2 * TAU * supportPhase);
     // Stance runs from 0 to WALK_STANCE: the foot passes beneath the
     // body at its midpoint. Arms reverse at contact/toe-off, not midstance.
     const armSwing = Math.sin(TAU * (phase - WALK_STANCE / 2));
@@ -97,7 +101,14 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     key('hip', frame, quaternionMultiply(QY((-sign * 55 + 2 * cycle) * DEG), QZ(1.8 * DEG * cycle)));
     key('upper', frame, quaternionMultiply(QY((-sign * 78 - 3 * cycle) * DEG), QZ(-2.5 * DEG * cycle)));
     key('neck', frame, QY((sign * 8 + 1.5 * cycle) * DEG));
-    key('groove', frame, id, [0, height * 0.004 * (1 - doubleStep), 0]);
+    // Groove moves the torso/leg roots, not the independent planted IK
+    // targets. Model-local +Z is the left support side after the hip yaw;
+    // mirror it with travel direction. Do not add fore/aft (X) drift.
+    key('groove', frame, id, [
+      0,
+      -height * (0.003 + 0.003 * doubleStep),
+      sign * height * 0.003 * Math.sin(TAU * supportPhase)
+    ]);
 
     // Arms swing opposite the feet. Keep the safe lowered-arm bias from the
     // existing idle motion so hands are less likely to cut through clothing.

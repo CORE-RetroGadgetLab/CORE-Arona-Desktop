@@ -89,6 +89,28 @@ test('planted foot opposes window travel at constant rate', () => {
   assert.ok(Math.abs(walkTravelSpeed(stride,100)*WALK_SECONDS*WALK_STANCE-stride*100) < 1e-9);
 });
 
+test('pelvis accepts load below rest height and transfers toward alternating supports', () => {
+  for (const direction of [-1, 1]) {
+    const samples = extractVmd(buildWalkingVmd({ boneNames: bones, modelHeight: 15, direction }).buffer);
+    const groove = frame => samples.find(s => s.name === 'グルーブ' && s.frame === frame).pos;
+    assert.ok(groove(2)[1] < groove(10)[1], 'load acceptance is lower than midstance');
+    assert.ok(groove(10)[2] * direction > 0, 'weight moves toward left support');
+    assert.ok(groove(28)[2] * direction < 0, 'weight moves toward right support');
+    for (const sample of samples.filter(s => s.name === 'グルーブ')) {
+      assert.equal(sample.pos[0], 0);
+      assert.ok(sample.pos[1] <= 0, 'pelvis must not overextend legs above rest');
+    }
+    for (const [name, offset] of [['左足ＩＫ', 0], ['右足ＩＫ', 0.5]]) {
+      for (const sample of samples.filter(s => s.name === name)) {
+        const foot = walkFootAt(sample.frame / WALK_FRAMES + offset, 15 * WALK_STRIDE_HEIGHT_RATIO, 15 * 0.025, direction);
+        assert.ok(Math.abs(sample.pos[0] - foot.x) < 1e-6);
+        assert.ok(Math.abs(sample.pos[1] - foot.y) < 1e-6);
+        assert.equal(sample.pos[2], 0);
+      }
+    }
+  }
+});
+
 test('arms oppose the ipsilateral foot without reversing local swing on a left turn', () => {
   for (const direction of [-1, 1]) {
     const samples = extractVmd(buildWalkingVmd({ boneNames: bones, direction }).buffer);
