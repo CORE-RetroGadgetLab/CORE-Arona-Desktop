@@ -6,7 +6,9 @@ import { LoadAssetContainerAsync } from '@babylonjs/core/Loading/sceneLoader';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
-import { Color4 } from '@babylonjs/core/Maths/math.color';
+import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
+import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 
 const FRAMES = Object.freeze([0,4,8,12,16,20,24,28,32]);
@@ -33,7 +35,8 @@ const ambient = new HemisphericLight('lab-fill', new Vector3(0,1,0),scene);
 ambient.intensity = 1.25;
 const key = new DirectionalLight('lab-key',new Vector3(-0.6,-1,0.8),scene);
 key.intensity = 0.9;
-engine.runRenderLoop(() => scene.render());
+engine.maxFPS = 30;
+engine.runRenderLoop(() => { updateSkeletonProxy(); scene.render(); });
 window.addEventListener('resize',() => engine.resize());
 
 let model = null;
@@ -43,6 +46,73 @@ let playing = false;
 let recording = false;
 let view = 'front';
 let loadId = 0;
+let renderMode = 'mesh';
+let proxyMesh = [];
+let proxyEdges = [];
+let proxyMaterial = null;
+let proxyNodes = [];
+
+function clearSkeletonProxy() {
+  for (const mesh of proxyMesh) mesh.dispose();
+  for (const link of proxyEdges) link.line.dispose();
+  proxyMaterial?.dispose();
+  proxyMesh = []; proxyEdges = []; proxyMaterial = null; proxyNodes = [];
+}
+
+function worldPosition(node) {
+  try { return node?.getAbsolutePosition?.().clone() ?? null; }
+  catch { return null; }
+}
+
+function updateSkeletonProxy() {
+  if (!proxyEdges.length) return;
+  for (const edge of proxyEdges) {
+    const start = worldPosition(edge.parent), end = worldPosition(edge.child);
+    if (!start || !end) continue;
+    MeshBuilder.CreateLines('rig-link', { points:[start,end], instance:edge.line });
+  }
+}
+
+function installSkeletonProxy(container) {
+  const animated = new Set(container.animationGroups.flatMap(animation =>
+    animation.targetedAnimations.map(channel => channel.target)));
+  const allNodes = container.transformNodes.filter(node => worldPosition(node));
+  // Prefer rig joints with keyframes. Some exporters attach actions to child
+  // nodes only, so add their ancestor chain for valid bone connections.
+  const visible = new Set();
+  for (const node of allNodes) {
+    if (!animated.has(node) && !/hips|pelvis|spine|neck|head|shoulder|arm|leg|foot|toe|hand/i.test(node.name)) continue;
+    for (let parent = node; parent && allNodes.includes(parent); parent = parent.parent) {
+      visible.add(parent);
+    }
+  }
+  const nodes = [...visible].filter(node => node.parent && visible.has(node.parent)).slice(0,150);
+  if (!nodes.length) throw new Error('GLBに表示可能な骨格がありません。メッシュ付きGLBか、骨格アニメーション付きGLBを選択してください');
+  const positions = nodes.flatMap(node => [worldPosition(node), worldPosition(node.parent)]).filter(Boolean);
+  const ys = positions.map(p => p.y), xs = positions.map(p => p.x), zs = positions.map(p => p.z);
+  const measure = Math.max(0.1,Math.max(...ys)-Math.min(...ys),
+    Math.max(...xs)-Math.min(...xs), Math.max(...zs)-Math.min(...zs));
+  const diameter = Math.max(0.01,measure*0.022);
+  proxyMaterial = new StandardMaterial('reference-bones',scene);
+  proxyMaterial.diffuseColor = new Color3(0.08,0.5,0.83);
+  proxyMaterial.emissiveColor = new Color3(0.05,0.26,0.49);
+  const markers = new Set([...nodes, ...nodes.map(n => n.parent)]);
+  for (const node of markers) {
+    const dot = MeshBuilder.CreateSphere('joint', { diameter,segments:6 },scene);
+    dot.material = proxyMaterial;
+    dot.parent = node;
+    dot.position = Vector3.Zero();
+    proxyMesh.push(dot);
+  }
+  for (const node of nodes) {
+    const start = worldPosition(node.parent), end = worldPosition(node);
+    const line = MeshBuilder.CreateLines('rig-link',{points:[start,end],updatable:true},scene);
+    line.color = new Color3(0.08,0.33,0.56);
+    proxyEdges.push({ parent:node.parent, child:node, line });
+  }
+  proxyNodes = [...markers];
+  renderMode = 'skeleton-proxy';
+}
 
 function say(message, error=false) {
   status.textContent = String(message);
@@ -61,7 +131,6 @@ function chooseView(next) {
 function fitCamera(container) {
   const meshes = container.meshes.filter(mesh => typeof mesh.getTotalVertices === 'function' &&
     mesh.getTotalVertices() > 0);
-  if (!meshes.length) throw new Error('メッシュが見つかりません。モデルを含むGLBを選択してください');
   let min = null, max = null;
   for (const mesh of meshes) {
     mesh.computeWorldMatrix(true);
@@ -70,6 +139,15 @@ function fitCamera(container) {
     min = min ? Vector3.Minimize(min,lo) : lo.clone();
     max = max ? Vector3.Maximize(max,hi) : hi.clone();
   }
+  if (!meshes.length) {
+    for (const node of proxyNodes) {
+      const pos = worldPosition(node);
+      if (!pos) continue;
+      min = min ? Vector3.Minimize(min,pos) : pos.clone();
+      max = max ? Vector3.Maximize(max,pos) : pos.clone();
+    }
+  }
+  if (!min || !max) throw new Error('表示できるメッシュや骨格がありません');
   const center = min.add(max).scale(0.5);
   const height = Math.max(0.1,max.y-min.y);
   const width = Math.max(0.1,max.x-min.x,max.z-min.z);
@@ -100,6 +178,7 @@ function chooseClip() {
   playing = false;
   preview.disabled = capture.disabled = false;
   group.goToFrame(group.from);
+  if (renderMode === 'skeleton-proxy') fitCamera(model);
   chooseView(view);
   const duration = activeDuration();
   clipInfo.textContent = group.name + ' / 約' + (duration ? duration.toFixed(2) : '?') + '秒。' +
@@ -120,10 +199,15 @@ input.addEventListener('change',async () => {
   try {
     if (group) group.stop();
     group = null;
+    clearSkeletonProxy();
     if (model) { model.dispose(); model = null; }
+    renderMode = 'mesh';
     const container = await LoadAssetContainerAsync(file,scene);
     if (request !== loadId) { container.dispose(); return; }
     container.addAllToScene();
+    if (!container.meshes.some(mesh => mesh.getTotalVertices?.() > 0)) {
+      installSkeletonProxy(container);
+    }
     try { fitCamera(container); }
     catch (error) { container.dispose(); throw error; }
     if (!container.animationGroups?.length) {
@@ -145,7 +229,9 @@ input.addEventListener('change',async () => {
     select.disabled = false;
     chooseClip();
     say('読み込み成功: ' + file.name + ' / ' +
-      model.animationGroups.length + 'クリップ。歩行クリップを確認してください。');
+      model.animationGroups.length + 'クリップ。' +
+      (renderMode === 'skeleton-proxy' ? 'メッシュがないため骨格プレビューで表示中。' : '') +
+      '歩行クリップを確認してください。');
   } catch (error) {
     console.error('[Reference Lab] GLB load failed:',error);
     say('GLBの読み込みに失敗: ' + String(error?.message ?? error).slice(0,280),true);
@@ -233,7 +319,7 @@ capture.addEventListener('click',async () => {
       await window.frameReferences.save(id,'sheet-'+angle+'.png',sheet.toDataURL('image/png'));
     }
     const output = await window.frameReferences.finish(id,{
-      fileName,clip:current.name,duration:activeDuration()
+      fileName,clip:current.name,duration:activeDuration(),renderMode
     });
     id = null;
     say('撮影完了。3視点×9コマを保存しました。\n比較ページ: '+output.comparison);
