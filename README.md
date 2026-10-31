@@ -515,7 +515,7 @@ FRAMEの生成歩行を変更せず、完成モーションのGLBをローカル
 - Quaternius Universal Animation Library: https://quaternius.itch.io/universal-animation-library
   - 無料 `Universal Animation Library[Standard].zip` の `Unreal-Godot/UAL1_Standard.glb` が候補。可能ならルートモーションなしの `_Standard` を使い、`_RM` は避けます。アニメーションのみのGLBでメッシュがない場合は簡易スケルトン表示になります。QuaterniusのライセンスはCC0。
 
-出力: `motion-lab/references/threejs/runs/` と `motion-lab/references/quaternius/runs/` にPNG27枚、比較シート3枚、`index.html`、`manifest.json` をソースごとに保存。最新の3者比較ページは `motion-lab/compare.html`。モデルの元GLBはコピー・アップロード・Gitへ追加しません。
+出力: `motion-lab/references/threejs/runs/` と `motion-lab/references/quaternius/runs/` にPNG27枚、比較シート3枚、`index.html`、`manifest.json` をソースごとに保存。最新の3者比較ページは `motion-lab/compare.html`。モデルの元GLBはコピー・アップロード・Gitへ追加しません。各ソースについて成功済みの最新3回を保持し、4回目以降は古い完全な撮影だけを自動整理します。未完成フォルダや手動追加ファイルは残します。
 
 制約: この段階では同じ歩行周期の進行率をサンプリングしているだけで、左右の足の着地位相、骨格寸法、初期姿勢、カメラから見た向きまでを完全に一致させたものではありません。Quaterniusの骨格表示は関節の研究用であり、完成キャラクターの見た目の品質を評価するものではありません。自動関節解析、モーションのPMXリターゲティング、FRAMEコードへの自動反映は未実装です。実機のGLB描画・撮影は要確認。
 
