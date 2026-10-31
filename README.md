@@ -494,6 +494,31 @@ FRAMEの右クリック →「ホーム」→ PERFORMANCE から、描画FPSの�
 - 比較シートにはフレーム番号と時刻を表示。各フレーム画像は元のWebGL解像度を最大960×1440pxまで保持し、比較シートのみ小さくします。元のWebGL描画が小さい場合は偽の画素を増やさず、カメラ側でモデルを大きく描画します。撮影プロファイルの数値は `manifest.json` の `captureProfile` に記録します。
 - 新条件は `git pull` 後、起動中のFRAMEを再起動してからの新しい撮影に適用されます。旧`motion-lab/runs/`の画像には変更を加えません。Codexの修正後の姿勢比較用には、`npm run motion:lab:request` で撮り直してください。
 
+### Reference Lab：完成歩行の比較（第1段階）
+
+FRAMEの生成歩行を変更せず、完成モーションのGLBをローカルで読み込み、3視点×9チェックポイントで撮影する比較画面です。
+
+操作:
+
+1. `npm ci` でBabylon公式GLBローダーもインストールし、`npm start` でFRAMEを起動。
+2. 右クリック →「診断」→「REFERENCE LAB」→「リファレンスを読み込んで撮影」。別ウィンドウが開きます。
+3. `three.js / Soldier` または `Quaternius` を選択し、ローカルの `.glb` を開く（各64MBまで）。FBXはこの段階では非対応。
+4. 収録クリップから `Walk` 等を選択。再生・停止、正面／斜め／側面の切替で動きを確認し、「3視点×9コマを撮影」。
+5. もう一方のGLBについても撮影。元のFRAME歩行を撮影していなければ `npm run motion:lab:request` で撮影する。
+6. 診断 →「3者比較ページを開く」、または `motion-lab/compare.html` を開く。FRAME / three.js / Quaterniusの最新画像を横に並べて確認できます。
+
+参照データの入手先:
+
+- three.jsの公式デモ: https://threejs.org/examples/webgl_animation_walk.html
+  - デモで使う `Soldier.glb`: https://github.com/mrdoob/three.js/blob/dev/examples/models/gltf/Soldier.glb
+  - デモの動き（`Walk`）を含むモデル。元データはMixamo由来で、配布条件を確認するまで公開版FRAMEには同梱しません。
+- Quaternius Universal Animation Library: https://quaternius.itch.io/universal-animation-library
+  - 無料 `Universal Animation Library[Standard].zip` の `Unreal-Godot/UAL1_Standard.glb` が候補。可能ならルートモーションなしの `_Standard` を使い、`_RM` は避けます。アニメーションのみのGLBでメッシュがない場合は簡易スケルトン表示になります。QuaterniusのライセンスはCC0。
+
+出力: `motion-lab/references/threejs/runs/` と `motion-lab/references/quaternius/runs/` にPNG27枚、比較シート3枚、`index.html`、`manifest.json` をソースごとに保存。最新の3者比較ページは `motion-lab/compare.html`。モデルの元GLBはコピー・アップロード・Gitへ追加しません。各ソースについて成功済みの最新3回を保持し、4回目以降は古い完全な撮影だけを自動整理します。未完成フォルダや手動追加ファイルは残します。
+
+制約: この段階では同じ歩行周期の進行率をサンプリングしているだけで、左右の足の着地位相、骨格寸法、初期姿勢、カメラから見た向きまでを完全に一致させたものではありません。Quaterniusの骨格表示は関節の研究用であり、完成キャラクターの見た目の品質を評価するものではありません。自動関節解析、モーションのPMXリターゲティング、FRAMEコードへの自動反映は未実装です。実機のGLB描画・撮影は要確認。
+
 ### Motion Labの撮影履歴の自動整理
 
 最新3回分の正常完了した撮影フォルダを保持します。4回目以降の撮影が成功した時だけ `motion-lab/runs/` の古い完了済み撮影を自動削除します。途中で失敗した撮影や未完成のフォルダには触れません。
