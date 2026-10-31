@@ -69,14 +69,26 @@ test('walking chest and hips face the direction of travel while head stays sligh
     const chestYaw = yawDegrees(atStart('上半身').quat);
     const hipYaw = yawDegrees(atStart('下半身').quat);
     const neckYaw = yawDegrees(atStart('首').quat);
-    assert.ok(Math.abs(chestYaw + direction * 78) < 0.2, 'chest should nearly face sideways');
+    const initialTwist = 20 * Math.sin(-2 * Math.PI * WALK_STANCE / 2);
+    assert.ok(Math.abs(chestYaw + direction * 78 - initialTwist) < 0.2, 'chest follows arm phase with a larger twist');
     assert.ok(Math.abs(hipYaw + direction * 90) < 0.2, 'hips face along travel');
     for (const sample of samples.filter(s => s.name === '左足ＩＫ' || s.name === '右足ＩＫ')) {
       assert.ok(Math.abs(yawDegrees(sample.quat) + direction * 90) < 0.2,
         'both foot IK headings stay aligned with travel throughout the cycle');
     }
-    assert.ok(Math.abs(neckYaw - direction * 8) < 0.2, 'head remains slightly turned toward camera');
+    assert.ok(Math.abs(neckYaw - direction * 8 + initialTwist) < 0.2, 'neck compensates torso twist');
+    assert.ok(Math.abs(chestYaw + neckYaw + direction * 70) < 0.2, 'combined head yaw preserves its original heading');
     assert.ok(chestYaw * hipYaw > 0, 'torso and hips must face the same travel direction');
+    for (const chest of samples.filter(s => s.name === '上半身')) {
+      const at = name => samples.find(s => s.name === name && s.frame === chest.frame);
+      const pitch = q => 2 * Math.atan2(q[0], q[3]);
+      const armDifference = pitch(at('左腕').quat) - pitch(at('右腕').quat);
+      const twist = yawDegrees(chest.quat) + direction * 78;
+      // Positive local yaw brings the left shoulder (+X) forwards (-Z),
+      // negative yaw brings the right shoulder forwards and the left back.
+      assert.ok(twist * armDifference > 0, 'each shoulder follows its own arm forwards and backwards');
+      assert.ok(Math.abs(twist) <= 20.01, 'twist stays within twenty degrees');
+    }
   }
 });
 
@@ -124,8 +136,11 @@ test('arms oppose the ipsilateral foot without reversing local swing on a left t
       // Positive arm X pitches the lowered hand forwards (-Z in MMD).
       assert.ok(at('左腕').quat[0] * footForward < 0);
       assert.ok(at('右腕').quat[0] * footForward > 0);
-      assert.ok(at('左ひじ').quat[1] < 0);
-      assert.ok(at('右ひじ').quat[1] > 0);
+      assert.ok(at('左ひじ').quat[1] > 0, 'left forearm bends forwards from +X');
+      assert.ok(at('右ひじ').quat[1] < 0, 'right forearm bends forwards from -X');
+      const armPitch = q => 2 * Math.atan2(q[0], q[3]) * 180 / Math.PI;
+      const leadingArm = footForward > 0 ? at('右腕') : at('左腕');
+      assert.ok(armPitch(leadingArm.quat) > 30, 'opposite arm swings clearly in front');
     }
   }
 });

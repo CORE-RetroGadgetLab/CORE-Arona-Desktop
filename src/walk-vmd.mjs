@@ -102,8 +102,12 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     // Face the chest almost along the path; let the neck open just a little
     // toward the camera so the character stays readable from a desktop view.
     key('hip', frame, quaternionMultiply(QY((-sign * 90 + 2 * cycle) * DEG), QZ(1.8 * DEG * cycle)));
-    key('upper', frame, quaternionMultiply(QY((-sign * 78 - 3 * cycle) * DEG), QZ(-2.5 * DEG * cycle)));
-    key('neck', frame, QY((sign * 8 + 1.5 * cycle) * DEG));
+    // Bring the leading arm's shoulder forwards with a visible +/-20 degree
+    // torso twist, using the arm phase rather than an unrelated sine wave.
+    const torsoTwist = 20 * armSwing;
+    key('upper', frame, quaternionMultiply(QY((-sign * 78 + torsoTwist) * DEG), QZ(-2.5 * DEG * cycle)));
+    // Counter the change from the previous chest yaw to keep the face steady.
+    key('neck', frame, QY((sign * 8 - 1.5 * cycle - torsoTwist) * DEG));
     // Groove moves the torso/leg roots, not the independent planted IK
     // targets. Model-local +Z is the left support side after the hip yaw;
     // mirror it with travel direction. Do not add fore/aft (X) drift.
@@ -117,10 +121,17 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     // existing idle motion so hands are less likely to cut through clothing.
     // Torso yaw already handles travel direction; local arm swing must not
     // reverse again when walking left. Standard MMD elbows bend about Y.
-    key('leftArm', frame, quaternionMultiply(QX(16 * DEG * armSwing), QZ(-50 * DEG)));
-    key('rightArm', frame, quaternionMultiply(QX(-16 * DEG * armSwing), QZ(50 * DEG)));
-    key('leftElbow', frame, QY(-(12 + 5 * armSwing) * DEG));
-    key('rightElbow', frame, QY((12 - 5 * armSwing) * DEG));
+    // Bias slightly forwards and widen the swing so the leading hand clears
+    // the torso. Left/right remain half a cycle apart, opposite their legs.
+    // Add up to 8 degrees only on the backswing, smoothly at the crossover.
+    // The approved forward half of the shoulder motion stays identical.
+    const armPitch = swing => (8 + 28 * swing - 8 * Math.min(0, swing) ** 2) * DEG;
+    key('leftArm', frame, quaternionMultiply(QX(armPitch(armSwing)), QZ(-50 * DEG)));
+    key('rightArm', frame, quaternionMultiply(QX(armPitch(-armSwing)), QZ(50 * DEG)));
+    // Rest forearms point along +X on the left and -X on the right: mirrored
+    // Y rotations bend both hands forwards (-Z), rather than behind the hips.
+    key('leftElbow', frame, QY((18 + 7 * armSwing) * DEG));
+    key('rightElbow', frame, QY(-(18 - 7 * armSwing) * DEG));
   }
   return { buffer: encodeGeneratedVmd(frames, [], 'FRAME Walk'), stride, frames: WALK_FRAMES, rig: bones };
 }
