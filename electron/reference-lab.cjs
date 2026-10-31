@@ -64,7 +64,7 @@ function referenceGallery(meta) {
     '.frames{margin:12px 0;display:flex;gap:10px;flex-wrap:wrap}</style><main>' +
     '<h1>REFERENCE LAB / ' + esc(meta.source) + '</h1><p>Clip: ' + esc(meta.clip) +
     ' / GLB: ' + esc(meta.fileName) + ' / Duration: ' + esc(meta.duration) +
-    's. Samples are normalized to clip time, NOT automatically aligned to foot contact.</p>' +
+    's. Samples use ' + esc(meta.renderMode) + ' view and normalized clip time, NOT automatically aligned to foot contact.</p>' +
     sections + '<p>Local reference only. Do not upload user-selected reference GLBs or frames.</p></main></html>';
 }
 
@@ -76,6 +76,8 @@ async function finishReferenceCapture(session, details) {
     version:1, source:session.source, createdAt:new Date().toISOString(),
     fileName:String(details?.fileName ?? '').slice(0,180),
     clip:String(details?.clip ?? '').slice(0,180),
+    renderMode:['mesh','skeleton-proxy'].includes(details?.renderMode)
+      ? details.renderMode : 'unknown',
     duration:Number.isFinite(details?.duration) ? Math.max(0,details.duration) : null,
     directions:['as-authored'], views:VIEWS, frames:FRAMES,
     framePhases:FRAMES.map(f => +(f/36).toFixed(6)),
