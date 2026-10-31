@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, clampAvatarPosition,
+  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode, clampAvatarPosition,
   avatarMovementLimits, unboundedOverlayZoom, scaleAvatarHitRectangles
 } = require('../electron/avatar-overlay.cjs');
 
@@ -90,4 +90,19 @@ test('partial stage overflow is possible on displays to the left and right', () 
   assert.deepEqual(clampAvatarPosition({x:-2300,y:200,width:580,height:780},
     {x:-1920,y:-200,width:1600,height:880}),
   {x:-2300,y:200,width:580,height:780});
+});
+
+test('settings panels suppress forwarded cursor events and restore avatar input on close', () => {
+  assert.deepEqual(avatarMouseInputMode({controlVisible:true,overAvatar:false}),
+    {ignore:true,forward:false});
+  assert.deepEqual(avatarMouseInputMode({controlVisible:true,overAvatar:true}),
+    {ignore:true,forward:false});
+  assert.deepEqual(avatarMouseInputMode({controlVisible:true,dragging:true}),
+    {ignore:true,forward:false});
+  assert.deepEqual(avatarMouseInputMode({controlVisible:false,overAvatar:false}),
+    {ignore:true,forward:true});
+  assert.deepEqual(avatarMouseInputMode({controlVisible:false,overAvatar:true}),
+    {ignore:false,forward:false});
+  assert.deepEqual(avatarMouseInputMode({controlVisible:false,dragging:true}),
+    {ignore:false,forward:false});
 });
