@@ -9,7 +9,7 @@ const { motionLabRoot, beginMotionLab, writeMotionLabImage, completeMotionLab,
 const { requestDirectory, resultName, validateRequest, REQUEST_NAME } =
   require('./motion-lab-control.cjs');
 const { beginReferenceCapture, saveReferenceImage, finishReferenceCapture,
-  writeReferenceComparison } = require('./reference-lab.cjs');
+  writeReferenceComparison, pruneReferenceCaptures } = require('./reference-lab.cjs');
 const { DEFAULT_FRAME_RATE, FRAME_RATE_OPTIONS, normalizeFrameRate, movementIntervalMs } = require('./frame-rate.cjs');
 const {
   stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, clampAvatarPosition,
@@ -1444,6 +1444,12 @@ app.whenReady().then(async () => {
     let comparison = '';
     try { comparison = await writeReferenceComparison(motionLabFolder()); }
     catch (error) { console.warn('[FRAME Reference Lab] comparison update failed:',error); }
+    try {
+      const deleted = await pruneReferenceCaptures(motionLabFolder(),session.source);
+      if (deleted.length) console.info('[FRAME Reference Lab] pruned old completed captures:', deleted);
+    } catch (error) {
+      console.warn('[FRAME Reference Lab] retention cleanup skipped:',error);
+    }
     return { directory, comparison };
   });
   ipcMain.handle('reference-lab:abort', async (event,id) => {
