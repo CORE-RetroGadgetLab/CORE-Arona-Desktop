@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none';">
+<title>FRAME / Reference Lab</title>
+<link rel="stylesheet" href="/src/reference-lab.css">
+</head>
+<body>
+<div class="shell">
+  <header class="bar"><span class="logo">FRAME</span><span class="bar-label">REFERENCE LAB / MOTION STUDY</span></header>
+  <main class="layout">
+    <aside class="control">
+      <p class="eyebrow">GAIT REFERENCE / STAGE 01</p>
+      <h1>歩行リファレンス</h1>
+      <p class="intro">完成モーションを見ながら、FRAMEの歩行と比べるための撮影資料を生成します。</p>
+      <div class="form-group">
+        <label for="reference-source">REFERENCE SOURCE</label>
+        <select id="reference-source">
+          <option value="threejs">three.js / Soldier (Mixamo)</option>
+          <option value="quaternius">Quaternius / Universal Animation Library</option>
+        </select>
+        <div class="help">著作権のあるモデルをアプリやGitへ同梱しないでください。</div>
+      </div>
+      <div class="form-group">
+        <label for="reference-file">LOCAL GLB</label>
+        <input id="reference-file" type="file" accept=".glb,model/gltf-binary">
+        <div class="help">GLBを選択してください。FBXは非対応です。モデルとアニメーションが含まれるGLBが必要です。</div>
+      </div>
+      <div class="form-group">
+        <label for="reference-clip">WALK CLIP</label>
+        <select id="reference-clip" disabled><option value="">先にGLBを選択</option></select>
+        <div class="help" id="clip-info">読み込んだクリップ一覧からWalk系を選択してください。</div>
+      </div>
+      <div class="view-buttons" role="group" aria-label="観察方向">
+        <button type="button" class="choice selected" data-view="front" aria-pressed="true">正面</button>
+        <button type="button" class="choice" data-view="three-quarter" aria-pressed="false">斜め</button>
+        <button type="button" class="choice" data-view="side" aria-pressed="false">側面</button>
+      </div>
+      <div class="actions">
+        <button id="preview" type="button" disabled>再生 / 停止</button>
+        <button id="capture" type="button" class="primary" disabled>3視点 × 9コマを撮影</button>
+        <button id="compare" type="button">FRAMEとの比較ページを開く</button>
+      </div>
+      <div class="status" id="status" role="status" aria-live="polite">GLBを選択してください。</div>
+      <p class="footnote">FRAMEの歩行コードは変更しません。画像はPC内の motion-lab/references/ に保存されます。接地位相の自動同期は次段階です。</p>
+    </aside>
+    <section class="stage">
+      <div class="stage-top"><span>MODEL PREVIEW</span><span id="stage-label">NO MODEL</span></div>
+      <div class="preview-frame"><canvas id="reference-canvas" aria-label="GLBモデルのアニメーションプレビュー"></canvas></div>
+      <div class="stage-bottom">LOCAL PREVIEW / Babylon.js / NO UPLOAD</div>
+    </section>
+  </main>
+</div>
+<script type="module" src="/src/reference-lab.js"></script>
+</body>
+</html>
