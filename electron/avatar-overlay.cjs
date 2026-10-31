@@ -37,6 +37,14 @@ function sanitizeHitRectangles(rectangles, stage, maxRectangles = 2000) {
   return result;
 }
 
+// A visible FRAME settings window owns pointer input. Electron's forwarded
+// mouse-move events from the full-screen transparent avatar overlay can make
+// Windows alternate between arrow and hand cursors over that window.
+function avatarMouseInputMode({ controlVisible = false, dragging = false, overAvatar = false } = {}) {
+  const ignore = controlVisible || (!dragging && !overAvatar);
+  return { ignore, forward: ignore && !controlVisible };
+}
+
 // Clamp the *visible model*, not the full WebGL viewport. The old bound check
 // trapped FRAME well before the physical screen edge because most of the stage
 // was transparent. Leave a small on-screen piece so it can always be grabbed.
@@ -104,7 +112,7 @@ function scaleAvatarHitRectangles(rectangles, oldStage, newStage) {
 }
 
 module.exports = {
-  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles,
+  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode,
   avatarMovementLimits, clampAvatarPosition, unboundedOverlayZoom,
   scaleAvatarHitRectangles, MIN_VISIBLE_AVATAR_PIXELS
 };
