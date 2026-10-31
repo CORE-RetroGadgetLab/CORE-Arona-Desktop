@@ -307,6 +307,7 @@ capture.addEventListener('click',async () => {
         const phase = frame/36;
         const animationFrame = current.from+(current.to-current.from)*phase;
         current.goToFrame(animationFrame);
+        updateSkeletonProxy();
         scene.render();
         const png = shotCanvas(LABELS[angle]+' / '+current.name+' / F'+String(frame).padStart(2,'0'));
         shots.push(png);
