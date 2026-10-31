@@ -12,7 +12,7 @@ const { beginReferenceCapture, saveReferenceImage, finishReferenceCapture,
   writeReferenceComparison, pruneReferenceCaptures } = require('./reference-lab.cjs');
 const { DEFAULT_FRAME_RATE, FRAME_RATE_OPTIONS, normalizeFrameRate, movementIntervalMs } = require('./frame-rate.cjs');
 const {
-  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, clampAvatarPosition,
+  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode, clampAvatarPosition,
   avatarMovementLimits, unboundedOverlayZoom, scaleAvatarHitRectangles
 } = require('./avatar-overlay.cjs');
 const { scanMotionLibrary, readMotionFile } = require('./motion-library.cjs');
@@ -81,6 +81,7 @@ let avatarBounds = null; // Physical avatar extent, independent of the full-disp
 let avatarHitRects = [];
 let avatarHitTimer = null;
 let avatarMouseIgnored = true;
+let avatarMouseForwarding = true;
 let avatarDisplayId = null;
 let settingsWindow = null;
 let menuWindow = null;
@@ -299,7 +300,11 @@ function openVoiceSettings() {
   settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   settingsWindow.webContents.on('will-navigate', event => event.preventDefault());
   settingsWindow.loadFile(path.join(__dirname, 'voice-settings.html'));
-  settingsWindow.on('closed', () => { settingsWindow = null; });
+  settingsWindow.on('closed', () => {
+    settingsWindow = null;
+    updateAvatarMousePassThrough();
+  });
+  updateAvatarMousePassThrough();
 }
 
 async function refreshVoices() {
@@ -621,10 +626,20 @@ function isOurWindow(event) {
 // WebGL transparency and antialiasing stay fully intact.
 function updateAvatarMousePassThrough(cursor = screen.getCursorScreenPoint()) {
   if (!mainWindow || mainWindow.isDestroyed() || !avatarBounds) return;
-  const shouldIgnore = !dragStart && !cursorHitsStageRects(cursor, avatarBounds, avatarHitRects);
-  if (shouldIgnore === avatarMouseIgnored) return;
-  avatarMouseIgnored = shouldIgnore;
-  mainWindow.setIgnoreMouseEvents(shouldIgnore, shouldIgnore ? { forward: true } : undefined);
+  // Suppress forwarded native mouse moves while a separate settings window
+  // owns the pointer. Otherwise Windows can flicker between CSS hand/arrow.
+  const controlVisible = Boolean(
+    (menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()) ||
+    (settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.isVisible()));
+  const { ignore, forward } = avatarMouseInputMode({
+    controlVisible,
+    dragging: Boolean(dragStart),
+    overAvatar: cursorHitsStageRects(cursor, avatarBounds, avatarHitRects)
+  });
+  if (ignore === avatarMouseIgnored && forward === avatarMouseForwarding) return;
+  avatarMouseIgnored = ignore;
+  avatarMouseForwarding = forward;
+  mainWindow.setIgnoreMouseEvents(ignore, forward ? { forward: true } : undefined);
 }
 function setAvatarRegion(rects) {
   if (!avatarBounds) return;
@@ -911,6 +926,7 @@ function finishMenuHide(generation) {
   if (menuHideTimer) clearTimeout(menuHideTimer);
   menuHideTimer = null;
   menuWindow.hide();
+  updateAvatarMousePassThrough();
 }
 
 function closeAvatarMenu(force = false) {
@@ -926,6 +942,7 @@ function closeAvatarMenu(force = false) {
     menuWindow = null;
     menuPrepared = false;
     popup.destroy();
+    updateAvatarMousePassThrough();
     return;
   }
   if (!menuWindow.isVisible() || menuClosing) {
@@ -989,6 +1006,7 @@ function createAvatarMenuWindow() {
       menuWindow = null;
       menuPrepared = false;
       menuClosing = false;
+      updateAvatarMousePassThrough();
     }
   });
   popup.loadFile(path.join(__dirname, 'avatar-menu.html')).catch(error => {
@@ -1020,6 +1038,7 @@ function showAvatarMenu() {
   // already available; optional VoiSona status refresh happens afterward.
   popup.webContents.send('avatar-menu:open', generation, menuState());
   popup.show();
+  updateAvatarMousePassThrough();
   popup.focus();
   void voisonaManager.refresh().then(() => {
     if (menuWindow === popup && !popup.isDestroyed() && popup.isVisible() &&
