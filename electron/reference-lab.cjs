@@ -142,7 +142,51 @@ async function writeReferenceComparison(motionRoot) {
   return dest;
 }
 
+// Keep the three newest complete reference observations per source. A folder
+// with extra files, symlinks or missing snapshots is intentionally untouched.
+const KEEP_REFERENCE_RUNS = 3;
+async function pruneReferenceCaptures(motionRoot, source) {
+  const root = referenceRoot(motionRoot, source);
+  const runs = path.join(root,'runs');
+  let entries;
+  try { entries = await fs.readdir(runs,{withFileTypes:true}); }
+  catch(error) { if(error.code === 'ENOENT') return []; throw error; }
+  const candidates = entries.filter(entry => entry.isDirectory() && SAFE_RUN.test(entry.name))
+    .map(entry => entry.name).sort().reverse();
+  const valid = [];
+  for (const name of candidates) {
+    const folder = path.join(runs,name);
+    try {
+      const items = await fs.readdir(folder,{withFileTypes:true});
+      if (items.length !== EXPECTED.size+2 || items.some(item => !item.isFile())) continue;
+      const names = new Set(items.map(item => item.name));
+      if (!names.has('index.html') || !names.has('manifest.json') ||
+          [...EXPECTED].some(item => !names.has(item))) continue;
+      const info = JSON.parse(await fs.readFile(path.join(folder,'manifest.json'),'utf8'));
+      if (info.source !== source || info.version !== 1 ||
+          !Array.isArray(info.files) || info.files.length !== EXPECTED.size ||
+          !info.files.every(item => EXPECTED.has(item))) continue;
+      valid.push({folder,name});
+    } catch(error) {
+      if(error.code === 'ENOENT' || error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
+  const latest = await readLatest(root);
+  const removed = [];
+  for (const entry of valid.slice(KEEP_REFERENCE_RUNS)) {
+    if (latest && latest.folder === entry.folder) continue;
+    // Recheck plain files, so custom notes or interrupted saves are preserved.
+    const contents = await fs.readdir(entry.folder,{withFileTypes:true});
+    if (contents.length !== EXPECTED.size+2 || contents.some(item => !item.isFile())) continue;
+    await fs.rm(entry.folder,{recursive:true,force:false});
+    removed.push(entry.name);
+  }
+  return removed;
+}
+
 module.exports = {
   SOURCES,VIEWS,FRAMES,EXPECTED,referenceRoot,beginReferenceCapture,
-  saveReferenceImage,finishReferenceCapture,writeReferenceComparison
+  saveReferenceImage,finishReferenceCapture,writeReferenceComparison,
+  pruneReferenceCaptures,KEEP_REFERENCE_RUNS
 };
