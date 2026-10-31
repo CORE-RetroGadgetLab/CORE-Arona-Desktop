@@ -70,7 +70,11 @@ test('walking chest and hips face the direction of travel while head stays sligh
     const hipYaw = yawDegrees(atStart('下半身').quat);
     const neckYaw = yawDegrees(atStart('首').quat);
     assert.ok(Math.abs(chestYaw + direction * 78) < 0.2, 'chest should nearly face sideways');
-    assert.ok(Math.abs(hipYaw + direction * 55) < 0.2, 'hips preserve existing gait orientation');
+    assert.ok(Math.abs(hipYaw + direction * 90) < 0.2, 'hips face along travel');
+    for (const sample of samples.filter(s => s.name === '左足ＩＫ' || s.name === '右足ＩＫ')) {
+      assert.ok(Math.abs(yawDegrees(sample.quat) + direction * 90) < 0.2,
+        'both foot IK headings stay aligned with travel throughout the cycle');
+    }
     assert.ok(Math.abs(neckYaw - direction * 8) < 0.2, 'head remains slightly turned toward camera');
     assert.ok(chestYaw * hipYaw > 0, 'torso and hips must face the same travel direction');
   }

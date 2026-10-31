@@ -70,6 +70,9 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
   const height = Math.max(0.3, Math.min(1000, modelHeight));
   const stride = height * WALK_STRIDE_HEIGHT_RATIO;
   const lift = height * 0.025;
+  // Foot IK parents the toe IK on standard PMX rigs. Orient its local
+  // forward (-Z) along travel as well as the pelvis, without moving targets.
+  const footHeading = QY(-sign * 90 * DEG);
   const frames = [];
   function key(role, frame, rotation = id, position = [0,0,0]) {
     if (bones[role]) frames.push({ name: bones[role], frame, rotation, position });
@@ -81,8 +84,8 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     const phase = frame / WALK_FRAMES;
     const left = walkFootAt(phase, stride, lift, sign);
     const right = walkFootAt(phase + 0.5, stride, lift, sign);
-    key('leftIK', frame, id, [left.x, left.y, 0]);
-    key('rightIK', frame, id, [right.x, right.y, 0]);
+    key('leftIK', frame, footHeading, [left.x, left.y, 0]);
+    key('rightIK', frame, footHeading, [right.x, right.y, 0]);
 
     const cycle = Math.sin(TAU * phase);
     // Lowest during load acceptance (middle of double support), highest
@@ -98,7 +101,7 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     // leaving FRAME's face pointed toward the viewer while its legs walked sideways.
     // Face the chest almost along the path; let the neck open just a little
     // toward the camera so the character stays readable from a desktop view.
-    key('hip', frame, quaternionMultiply(QY((-sign * 55 + 2 * cycle) * DEG), QZ(1.8 * DEG * cycle)));
+    key('hip', frame, quaternionMultiply(QY((-sign * 90 + 2 * cycle) * DEG), QZ(1.8 * DEG * cycle)));
     key('upper', frame, quaternionMultiply(QY((-sign * 78 - 3 * cycle) * DEG), QZ(-2.5 * DEG * cycle)));
     key('neck', frame, QY((sign * 8 + 1.5 * cycle) * DEG));
     // Groove moves the torso/leg roots, not the independent planted IK
