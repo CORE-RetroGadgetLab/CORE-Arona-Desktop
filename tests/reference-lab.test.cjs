@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   SOURCES, VIEWS, FRAMES, EXPECTED, referenceRoot, beginReferenceCapture,
-  saveReferenceImage, finishReferenceCapture, writeReferenceComparison
+  saveReferenceImage, finishReferenceCapture, writeReferenceComparison,
+  pruneReferenceCaptures, KEEP_REFERENCE_RUNS
 } = require('../electron/reference-lab.cjs');
 
 const png = 'data:image/png;base64,' +
@@ -81,4 +82,30 @@ test('reference gallery escapes locally selected names', async t => {
   const html = await fs.readFile(path.join(dir,'index.html'),'utf8');
   assert.ok(!html.includes('<script>'));
   assert.ok(html.includes('&lt;script&gt;'));
+});
+
+test('reference pruning protects three latest complete runs and leaves user notes untouched', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(),'frame-ref-retention-'));
+  t.after(() => fs.rm(root,{recursive:true,force:true}));
+  assert.equal(KEEP_REFERENCE_RUNS,3);
+  const folders = [];
+  for(let i=0;i<5;i++) {
+    const session = await beginReferenceCapture(root,'quaternius');
+    for(const name of EXPECTED) await saveReferenceImage(session,name,png);
+    folders.push(await finishReferenceCapture(session,{clip:'Walk',renderMode:'skeleton-proxy'}));
+    // Unique UUID ordering can be affected by the millisecond timestamp;
+    // pin deterministic test folder names to stable lexical timestamps.
+    const target = path.join(path.dirname(folders[i]),
+      '2026-11-01T00-0'+i+'-00-000Z-'+String(i).repeat(8));
+    await fs.rename(folders[i],target);
+    folders[i]=target;
+    const latest = path.join(root,'references','quaternius','latest.json');
+    await fs.writeFile(latest,JSON.stringify({folder:'runs/'+path.basename(target)}));
+  }
+  await fs.writeFile(path.join(folders[0],'keep-me.txt'),'personal');
+  const removed = await pruneReferenceCaptures(root,'quaternius');
+  assert.deepEqual(removed,[path.basename(folders[1])]);
+  for(const index of [0,2,3,4]) await fs.access(folders[index]);
+  await assert.rejects(fs.access(folders[1]), {code:'ENOENT'});
+  assert.deepEqual(await pruneReferenceCaptures(root,'quaternius'),[]);
 });
