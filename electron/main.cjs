@@ -8,6 +8,8 @@ const { motionLabRoot, beginMotionLab, writeMotionLabImage, completeMotionLab,
   pruneMotionLabRuns, MOTION_LAB_KEEP_RUNS } = require('./motion-lab.cjs');
 const { requestDirectory, resultName, validateRequest, REQUEST_NAME } =
   require('./motion-lab-control.cjs');
+const { beginReferenceCapture, saveReferenceImage, finishReferenceCapture,
+  writeReferenceComparison } = require('./reference-lab.cjs');
 const { DEFAULT_FRAME_RATE, FRAME_RATE_OPTIONS, normalizeFrameRate, movementIntervalMs } = require('./frame-rate.cjs');
 const {
   stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, clampAvatarPosition,
@@ -82,6 +84,8 @@ let avatarMouseIgnored = true;
 let avatarDisplayId = null;
 let settingsWindow = null;
 let menuWindow = null;
+let referenceWindow = null;
+let referenceCapture = null;
 let motionFolderDialogOpen = false;
 let menuLayout = { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, zoom: 1 };
 let menuTextSize = DEFAULT_TEXT_SIZE;
@@ -1030,6 +1034,46 @@ function isMenuWindow(event) {
     event.sender === menuWindow.webContents);
 }
 
+function isReferenceWindow(event) {
+  return Boolean(referenceWindow && !referenceWindow.isDestroyed() &&
+    event.sender === referenceWindow.webContents);
+}
+
+function openReferenceLab() {
+  if (referenceWindow && !referenceWindow.isDestroyed()) {
+    referenceWindow.show();
+    referenceWindow.focus();
+    return;
+  }
+  const window = new BrowserWindow({
+    title: 'FRAME / Reference Lab',
+    width: 1130,
+    height: 900,
+    minWidth: 840,
+    minHeight: 730,
+    backgroundColor: '#0e0e0e',
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'reference-lab-preload.cjs'),
+      contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true
+    }
+  });
+  referenceWindow = window;
+  window.setMenuBarVisibility(false);
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', event => event.preventDefault());
+  window.on('closed', () => {
+    if (referenceWindow === window) {
+      referenceWindow = null;
+      referenceCapture = null; // Partial captures stay as private, unfinished folders.
+    }
+  });
+  window.once('ready-to-show', () => { if (!window.isDestroyed()) window.show(); });
+  window.loadFile(path.join(__dirname, '..', 'dist', 'reference-lab.html'))
+    .catch(error => console.error('[FRAME Reference Lab] load failed:', error));
+}
+
 async function executeMenuAction(action, value) {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('モデル画面がありません');
   if (motionLabSession && (action === 'model.change' || action.startsWith('motion.'))) {
@@ -1052,6 +1096,16 @@ async function executeMenuAction(action, value) {
       }, 120000);
       mainWindow.webContents.send('avatar:motion-lab-start', { id: session.id });
       return '歩行の撮影を開始しました。完了すると保存先を開きます';
+    }
+    case 'diagnostic.referenceLab': {
+      openReferenceLab();
+      return 'Reference Labを開きました。GLBを選んでください';
+    }
+    case 'diagnostic.referenceCompare': {
+      const comparison = await writeReferenceComparison(motionLabFolder());
+      const error = await shell.openPath(comparison);
+      if (error) throw new Error('比較ページを開けません: ' + error);
+      return 'FRAMEと参考モーションの比較ページを開きました';
     }
     case 'diagnostic.motionFolder': {
       const folder = motionLabFolder();
@@ -1368,6 +1422,42 @@ app.whenReady().then(async () => {
     return stageInDisplay(avatarBounds, avatarDisplay().bounds);
   });
   ipcMain.handle('avatar:current', () => infoForCurrentModel());
+  ipcMain.handle('reference-lab:begin', async (event, source) => {
+    if (!isReferenceWindow(event)) throw new Error('Unauthorized reference session');
+    if (referenceCapture) throw new Error('他の参考モーションを撮影中です');
+    referenceCapture = await beginReferenceCapture(motionLabFolder(),source);
+    return { id: referenceCapture.id };
+  });
+  ipcMain.handle('reference-lab:save', async (event, id, name, data) => {
+    if (!isReferenceWindow(event) || !referenceCapture || referenceCapture.id !== id) {
+      throw new Error('Invalid reference capture session');
+    }
+    return saveReferenceImage(referenceCapture,name,data);
+  });
+  ipcMain.handle('reference-lab:finish', async (event, id, metadata) => {
+    if (!isReferenceWindow(event) || !referenceCapture || referenceCapture.id !== id) {
+      throw new Error('Invalid reference capture session');
+    }
+    const session = referenceCapture;
+    referenceCapture = null;
+    const directory = await finishReferenceCapture(session,metadata);
+    let comparison = '';
+    try { comparison = await writeReferenceComparison(motionLabFolder()); }
+    catch (error) { console.warn('[FRAME Reference Lab] comparison update failed:',error); }
+    return { directory, comparison };
+  });
+  ipcMain.handle('reference-lab:abort', async (event,id) => {
+    if (!isReferenceWindow(event)) throw new Error('Unauthorized reference window');
+    if (referenceCapture && referenceCapture.id === id) referenceCapture = null;
+    return true;
+  });
+  ipcMain.handle('reference-lab:open-comparison', async event => {
+    if (!isReferenceWindow(event)) throw new Error('Unauthorized reference window');
+    const file = await writeReferenceComparison(motionLabFolder());
+    const error = await shell.openPath(file);
+    if (error) throw new Error(error);
+    return file;
+  });
   ipcMain.handle('avatar:motion-lab:save', async (event, id, filename, png, info) => {
     if (!isOurWindow(event) || !motionLabSession || motionLabSession.id !== id) {
       throw new Error('Invalid motion capture session');
@@ -1392,6 +1482,8 @@ app.whenReady().then(async () => {
       });
       updateMotionLabStatus('保存完了: ' + directory);
       console.info('[FRAME motion lab] saved:', directory);
+      try { await writeReferenceComparison(motionLabFolder()); }
+      catch (error) { console.warn('[FRAME Reference Lab] comparison update failed:',error); }
       await respondToMotionLabRequest(session, { ok: true, directory });
       // Prune only AFTER the new gallery and manifest have been saved.
       // Retention failure must not turn a successful capture into an error.
@@ -1714,6 +1806,8 @@ app.on('before-quit', event => {
     return;
   }
   clearMotionLabSession();
+  referenceCapture = null;
+  if (referenceWindow && !referenceWindow.isDestroyed()) referenceWindow.close();
   if (motionLabRequestTimer) clearInterval(motionLabRequestTimer);
   motionLabRequestTimer = null;
   closeAvatarMenu(true);
