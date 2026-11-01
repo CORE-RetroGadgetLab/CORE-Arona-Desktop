@@ -23,6 +23,15 @@ function cursorHitsStageRects(cursor, stage, rectangles) {
   );
 }
 
+// A development-only gait loop wraps to the opposite edge in the same
+// direction. Production walking still stops at the screen boundary.
+function walkEdgeBehavior(position, direction, minimum, maximum, continuous = false) {
+  const atEdge = direction > 0 ? position >= maximum : position <= minimum;
+  if (!atEdge) return { x: position, stop: false };
+  if (!continuous) return { x: direction > 0 ? maximum : minimum, stop: true };
+  return { x: direction > 0 ? minimum : maximum, stop: false };
+}
+
 function sanitizeHitRectangles(rectangles, stage, maxRectangles = 2000) {
   if (!Array.isArray(rectangles) || rectangles.length > maxRectangles) return [];
   const result = [];
@@ -112,7 +121,7 @@ function scaleAvatarHitRectangles(rectangles, oldStage, newStage) {
 }
 
 module.exports = {
-  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode,
+  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode, walkEdgeBehavior,
   avatarMovementLimits, clampAvatarPosition, unboundedOverlayZoom,
   scaleAvatarHitRectangles, MIN_VISIBLE_AVATAR_PIXELS
 };
