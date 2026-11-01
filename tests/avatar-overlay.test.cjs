@@ -2,7 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode, clampAvatarPosition,
+  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode,
+  walkEdgeBehavior, clampAvatarPosition,
   avatarMovementLimits, unboundedOverlayZoom, scaleAvatarHitRectangles
 } = require('../electron/avatar-overlay.cjs');
 
@@ -105,4 +106,15 @@ test('settings panels suppress forwarded cursor events and restore avatar input 
     {ignore:false,forward:false});
   assert.deepEqual(avatarMouseInputMode({controlVisible:false,dragging:true}),
     {ignore:false,forward:false});
+});
+
+test('development walking wraps at screen edges while ordinary walking stops', () => {
+  assert.deepEqual(walkEdgeBehavior(40,1,-100,100,true),{x:40,stop:false});
+  assert.deepEqual(walkEdgeBehavior(100,1,-100,100,true),{x:-100,stop:false});
+  assert.deepEqual(walkEdgeBehavior(105,1,-100,100,true),{x:-100,stop:false});
+  assert.deepEqual(walkEdgeBehavior(-100,-1,-100,100,true),{x:100,stop:false});
+  assert.deepEqual(walkEdgeBehavior(-110,-1,-100,100,true),{x:100,stop:false});
+  assert.deepEqual(walkEdgeBehavior(100,1,-100,100,false),{x:100,stop:true});
+  assert.deepEqual(walkEdgeBehavior(-100,-1,-100,100,false),{x:-100,stop:true});
+  assert.deepEqual(walkEdgeBehavior(50,-1,-100,100,false),{x:50,stop:false});
 });
