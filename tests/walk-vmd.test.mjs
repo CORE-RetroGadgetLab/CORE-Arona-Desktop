@@ -154,6 +154,22 @@ test('planted foot opposes window travel at constant rate', () => {
   assert.ok(Math.abs(walkTravelSpeed(stride,100)*WALK_SECONDS*WALK_STANCE-stride*100) < 1e-9);
 });
 
+test('planted feet retain knee clearance at the high point of the stride', () => {
+  // Regression for near-singular CCD leg IK: previous groove height could
+  // reach zero while the foot IK target still had a horizontal offset.
+  // This ratio-based check is model-independent, not a substitute for PMX QA.
+  const height = 15;
+  for (const direction of [-1, 1]) {
+    const samples = extractVmd(buildWalkingVmd({ boneNames: bones, modelHeight: height, direction }).buffer);
+    const grooveFrames = samples.filter(sample => sample.name === 'グルーブ');
+    assert.ok(grooveFrames.length > 0);
+    for (const sample of grooveFrames) {
+      assert.ok(sample.pos[1] <= -height * 0.0069,
+        'the hips should not reach a straight-knee rest height during walking');
+    }
+  }
+});
+
 test('pelvis accepts load below rest height and transfers toward alternating supports', () => {
   for (const direction of [-1, 1]) {
     const samples = extractVmd(buildWalkingVmd({ boneNames: bones, modelHeight: 15, direction }).buffer);

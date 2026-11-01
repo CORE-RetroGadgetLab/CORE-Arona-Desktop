@@ -7,6 +7,9 @@ import { encodeGeneratedVmd } from './idle-vmd.mjs';
 export const WALK_FRAMES = 36; // 1.2 seconds, two footsteps at 30 fps
 export const WALK_STANCE = 0.62;
 export const WALK_STRIDE_HEIGHT_RATIO = 0.095;
+// Keep a small knee bend even at the highest point of the walking bounce.
+// A perfectly straight leg makes PMX CCD IK nearly singular when the foot moves.
+export const WALK_PELVIS_CLEARANCE_RATIO = 0.010;
 export const WALK_SECONDS = WALK_FRAMES / 30;
 
 const DEG = Math.PI / 180;
@@ -183,7 +186,9 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     // mirror it with travel direction. Do not add fore/aft (X) drift.
     key('groove', frame, id, [
       0,
-      -height * (0.003 + 0.003 * doubleStep),
+      // Previously this reached zero at midstance, straightening the knee
+      // exactly when its IK target was moving. Keep a little bend throughout.
+      -height * (WALK_PELVIS_CLEARANCE_RATIO + 0.003 * doubleStep),
       sign * height * 0.003 * Math.sin(TAU * supportPhase)
     ]);
 
