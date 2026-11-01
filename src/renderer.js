@@ -1199,11 +1199,19 @@ scene.onBeforeRenderObservable.add(() => {
 
 engine.runRenderLoop(() => {
   scene.render();
+  // Advance native horizontal travel from the same MMD frame that drives foot IK.
+  // This removes the continuously drifting second clock (native setInterval).
+  if (walkingMotion && !motionCaptureBusy && !isChangingMotion && !isSeekingIdleLoop) {
+    window.aronaDesktop.setWalkFrame(mmdRuntime.currentFrameTime);
+  }
   bodyWarp.render(performance.now());
   if (activeMmdModel && !motionCaptureBusy && !isChangingMotion && !isSeekingIdleLoop) {
     const endFrame = activeImportedMotion?.endFrame ??
       walkingMotion?.endFrame ?? customIdleMotion?.endFrame ?? IDLE_FRAMES;
-    if (mmdRuntime.currentFrameTime >= endFrame - 1) {
+    // The walking VMD closes at frame 36; restarting at frame 35 skips its
+    // last foot-placement frame and causes a visible kick every gait cycle.
+    const loopThreshold = walkingMotion ? endFrame : endFrame - 1;
+    if (mmdRuntime.currentFrameTime >= loopThreshold) {
       isSeekingIdleLoop = true;
       if (activeImportedMotion) {
         const finished = activeImportedMotion.name;
@@ -1213,7 +1221,17 @@ engine.runRenderLoop(() => {
           .catch(error => reportIdle('待機への復帰に失敗: ' + String(error?.message ?? error)))
           .finally(() => { isSeekingIdleLoop = false; });
       } else {
-        void mmdRuntime.seekAnimation(0, true).catch(error => {
+        const wasWalking = Boolean(walkingMotion);
+        const loopModel = activeMmdModel;
+        const loopRequest = motionRequestId;
+        void mmdRuntime.seekAnimation(0, true).then(async () => {
+          // At frame 36 MmdRuntime pauses itself; resume only the walk that
+          // still owns this clip. Other idle loops retain their existing flow.
+          if (wasWalking && walkingMotion && activeMmdModel === loopModel &&
+              motionRequestId === loopRequest && !mmdRuntime.isAnimationPlaying) {
+            await mmdRuntime.playAnimation();
+          }
+        }).catch(error => {
           console.warn('Idle animation loop could not be reset', error);
         }).finally(() => { isSeekingIdleLoop = false; });
       }

@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('aronaDesktop', Object.freeze({
   motionLabFinish: (id, outcome) => ipcRenderer.invoke('avatar:motion-lab:finish', id, outcome),
   setWalkVelocity: (direction, speed, continuous = false) =>
     ipcRenderer.send('avatar:walk-velocity', direction, speed, continuous === true),
+  setWalkFrame: (frameTime) => ipcRenderer.send('avatar:walk-frame', frameTime),
   onWalkStopped: (callback) => ipcRenderer.on('avatar:walk-stopped', () => callback()),
   onMotionWarpEnabled: (callback) => ipcRenderer.on('avatar:motion-warp-enabled', (_event, enabled) => callback(enabled)),
   onMotionTransitionMode: (callback) => ipcRenderer.on('avatar:motion-transition-mode', (_event, mode) => callback(mode)),
