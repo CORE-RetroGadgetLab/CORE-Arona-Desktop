@@ -140,6 +140,8 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     const torsoTwist = 20 * armSwing;
     key('upper', frame, quaternionMultiply(QY((-sign * 78 + torsoTwist) * DEG), QZ(-2.5 * DEG * cycle)));
     // Counter the change from the previous chest yaw to keep the face steady.
+    // TODO: When a model without an upper-body bone is available, recheck whether
+    // the neck counter-rotation acts alone. Do not change behavior until verified.
     key('neck', frame, QY((sign * 8 - 1.5 * cycle - torsoTwist) * DEG));
     // Groove moves the torso/leg roots, not the independent planted IK
     // targets. Model-local +Z is the left support side after the hip yaw;
@@ -154,12 +156,13 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     // existing idle motion so hands are less likely to cut through clothing.
     // Torso yaw already handles travel direction; local arm swing must not
     // reverse again when walking left. Standard MMD elbows bend about Y.
-    // Bias slightly forwards and widen the swing so the leading hand clears
-    // the torso. Left/right remain half a cycle apart, opposite their legs.
-    // Add up to 8 degrees only on the backswing, smoothly at the crossover.
-    // Ease the forward swing down by up to 6 degrees; keep the backswing.
-    const armPitch = swing => (8 + 28 * swing - 8 * Math.min(0, swing) ** 2
-      - 6 * Math.max(0, swing) ** 2) * DEG;
+    // Keep the 8-degree bias and the approved 28-degree backswing. Ease the
+    // forward side to a 17-degree maximum without overshoot. Its slope at
+    // zero matches the backswing (28), keeping the crossover smooth.
+    // Left/right remain half a cycle apart, opposite their legs.
+    const armPitch = swing => (swing > 0
+      ? 8 + 9 * (1 - (1 - swing) ** (28 / 9))
+      : 8 + 28 * swing - 8 * swing ** 2) * DEG;
     key('leftArm', frame, quaternionMultiply(QX(armPitch(armSwing)), QZ(-50 * DEG)));
     key('rightArm', frame, quaternionMultiply(QX(armPitch(-armSwing)), QZ(50 * DEG)));
     // Rest forearms point along +X on the left and -X on the right: mirrored

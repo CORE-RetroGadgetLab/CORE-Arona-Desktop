@@ -683,13 +683,21 @@ function stopWalkingWithoutRestore() {
   walkingMotion = null;
 }
 
-async function startWalking(direction) {
+async function startWalking(direction, continuous = false) {
   if (![-1, 1].includes(direction) || !activeMmdModel || !activeRoot ||
       !idleAnimationHandle || exitWarpStarted) {
     reportIdle('歩行を開始できません: モデルと足IKを確認してください');
     return;
   }
-  if (walkingMotion?.direction === direction) return;
+  if (walkingMotion?.direction === direction) {
+    // Switching between one-shot and development loop should not restart
+    // the VMD, because that would introduce an artificial gait-phase jump.
+    if (walkingMotion.continuous !== continuous) {
+      walkingMotion.continuous = continuous;
+      window.aronaDesktop.setWalkVelocity(direction, walkingMotion.speed, continuous);
+    }
+    return;
+  }
   stopWalkingWithoutRestore();
   const model = activeMmdModel;
   const requestId = ++motionRequestId;
@@ -731,9 +739,9 @@ async function startWalking(direction) {
         if (requestId !== motionRequestId || model !== activeMmdModel || exitWarpStarted) return;
         await mmdRuntime.playAnimation();
         activeImportedMotion = null;
-        walkingMotion = { ...cached, direction };
+        walkingMotion = { ...cached, direction, speed, continuous };
         if (previous) model.destroyRuntimeAnimation(previous.handle);
-        window.aronaDesktop.setWalkVelocity(direction, speed);
+        window.aronaDesktop.setWalkVelocity(direction, speed, continuous);
         reportIdle(direction < 0 ? '左へ歩行中（足IK同期）' : '右へ歩行中（足IK同期）');
       });
     } catch (error) {
@@ -773,7 +781,7 @@ function stopWalkingAndRestore() {
 function onMotionCommand(command) {
   if (motionCaptureBusy) return; // Preserve the snapshot's deterministic pose.
   if (command?.type === 'walk') {
-    void startWalking(command.direction);
+    void startWalking(command.direction, command.continuous === true);
     return;
   }
   if (command?.type === 'walk-stop') {

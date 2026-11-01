@@ -150,7 +150,10 @@ test('arms oppose the ipsilateral foot without reversing local swing on a left t
       const armPitch = q => 2 * Math.atan2(q[0], q[3]) * 180 / Math.PI;
       const leadingArm = footForward > 0 ? at('右腕') : at('左腕');
       const leadingPitch = armPitch(leadingArm.quat);
-      assert.ok(leadingPitch > 25 && leadingPitch <= 30.01, 'opposite arm swings forwards with a restrained reach');
+      assert.ok(leadingPitch > 16 && leadingPitch <= 17.01, 'opposite arm swings forwards up to seventeen degrees');
+      const trailingArm = footForward > 0 ? at('左腕') : at('右腕');
+      const trailingPitch = armPitch(trailingArm.quat);
+      assert.ok(trailingPitch < -24 && trailingPitch >= -28.01, 'backswing keeps its twenty-eight degree reach');
     }
   }
 });

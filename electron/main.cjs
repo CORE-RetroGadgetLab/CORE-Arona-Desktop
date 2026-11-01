@@ -3,6 +3,7 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, screen, safeStorage, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { resolveAssetPath } = require('./asset-path.cjs');
 const { motionLabRoot, beginMotionLab, writeMotionLabImage, completeMotionLab,
   pruneMotionLabRuns, MOTION_LAB_KEEP_RUNS } = require('./motion-lab.cjs');
@@ -12,7 +13,8 @@ const { beginReferenceCapture, saveReferenceImage, finishReferenceCapture,
   writeReferenceComparison, pruneReferenceCaptures } = require('./reference-lab.cjs');
 const { DEFAULT_FRAME_RATE, FRAME_RATE_OPTIONS, normalizeFrameRate, movementIntervalMs } = require('./frame-rate.cjs');
 const {
-  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, clampAvatarPosition,
+  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode,
+  walkEdgeBehavior, clampAvatarPosition,
   avatarMovementLimits, unboundedOverlayZoom, scaleAvatarHitRectangles
 } = require('./avatar-overlay.cjs');
 const { scanMotionLibrary, readMotionFile } = require('./motion-library.cjs');
@@ -81,6 +83,7 @@ let avatarBounds = null; // Physical avatar extent, independent of the full-disp
 let avatarHitRects = [];
 let avatarHitTimer = null;
 let avatarMouseIgnored = true;
+let avatarMouseForwarding = true;
 let avatarDisplayId = null;
 let settingsWindow = null;
 let menuWindow = null;
@@ -90,10 +93,10 @@ let motionFolderDialogOpen = false;
 let menuLayout = { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, zoom: 1 };
 let menuTextSize = DEFAULT_TEXT_SIZE;
 // Session-only navigation state. Closing FRAME clears this automatically.
-const MENU_TABS = ['home', 'motion', 'voice', 'emotion', 'status'];
+const MENU_TABS = ['dev', 'home', 'motion', 'voice', 'emotion', 'status'];
 const MENU_TAB_SET = new Set(MENU_TABS);
 let menuViewState = {
-  tab: 'home',
+  tab: 'dev',
   scroll: Object.fromEntries(MENU_TABS.map(tab => [tab, 0])),
   motionList: 0,
   voiceList: 0
@@ -113,6 +116,8 @@ let dragTimer = null;
 let dragStart = null;
 let walkTimer = null;
 let walkState = null;
+let devWalkDirection = 0;
+let devRestartRequested = false;
 let idleDiagnostics = 'モーションの読み込みを待っています';
 let motionLabSession = null;
 let motionLabTimeout = null;
@@ -299,7 +304,11 @@ function openVoiceSettings() {
   settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   settingsWindow.webContents.on('will-navigate', event => event.preventDefault());
   settingsWindow.loadFile(path.join(__dirname, 'voice-settings.html'));
-  settingsWindow.on('closed', () => { settingsWindow = null; });
+  settingsWindow.on('closed', () => {
+    settingsWindow = null;
+    updateAvatarMousePassThrough();
+  });
+  updateAvatarMousePassThrough();
 }
 
 async function refreshVoices() {
@@ -621,10 +630,20 @@ function isOurWindow(event) {
 // WebGL transparency and antialiasing stay fully intact.
 function updateAvatarMousePassThrough(cursor = screen.getCursorScreenPoint()) {
   if (!mainWindow || mainWindow.isDestroyed() || !avatarBounds) return;
-  const shouldIgnore = !dragStart && !cursorHitsStageRects(cursor, avatarBounds, avatarHitRects);
-  if (shouldIgnore === avatarMouseIgnored) return;
-  avatarMouseIgnored = shouldIgnore;
-  mainWindow.setIgnoreMouseEvents(shouldIgnore, shouldIgnore ? { forward: true } : undefined);
+  // Suppress forwarded native mouse moves while a separate settings window
+  // owns the pointer. Otherwise Windows can flicker between CSS hand/arrow.
+  const controlVisible = Boolean(
+    (menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()) ||
+    (settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.isVisible()));
+  const { ignore, forward } = avatarMouseInputMode({
+    controlVisible,
+    dragging: Boolean(dragStart),
+    overAvatar: cursorHitsStageRects(cursor, avatarBounds, avatarHitRects)
+  });
+  if (ignore === avatarMouseIgnored && forward === avatarMouseForwarding) return;
+  avatarMouseIgnored = ignore;
+  avatarMouseForwarding = forward;
+  mainWindow.setIgnoreMouseEvents(ignore, forward ? { forward: true } : undefined);
 }
 function setAvatarRegion(rects) {
   if (!avatarBounds) return;
@@ -659,20 +678,23 @@ function stopAvatarWalk(notify = false) {
   if (walkTimer !== null) clearInterval(walkTimer);
   walkTimer = null;
   walkState = null;
+  devWalkDirection = 0;
   if (notify && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('avatar:walk-stopped');
   }
 }
 
-function beginAvatarWalk(direction, speed) {
+function beginAvatarWalk(direction, speed, continuous = false) {
   stopAvatarWalk();
+  if (continuous) devWalkDirection = direction;
   if (!mainWindow || mainWindow.isDestroyed() ||
       ![-1, 1].includes(direction) || !Number.isFinite(speed)) return;
   stopAvatarDrag();
   const actualSpeed = Math.max(20, Math.min(360, speed));
   const bounds = avatarBounds;
   if (!bounds) return;
-  walkState = { direction, speed: actualSpeed, x: bounds.x, last: performance.now() };
+  walkState = { direction, speed: actualSpeed, x: bounds.x,
+    last: performance.now(), continuous };
   walkTimer = setInterval(() => {
     const state = walkState;
     if (!state || !mainWindow || mainWindow.isDestroyed()) {
@@ -695,9 +717,15 @@ function beginAvatarWalk(direction, speed) {
       avatarBounds = { ...bounds, x: next };
       syncAvatarViewport();
     }
-    if ((state.direction > 0 && state.x >= maximum) ||
-        (state.direction < 0 && state.x <= minimum)) {
-      stopAvatarWalk(true); // Stop before the model would slide beyond the screen.
+    const edge = walkEdgeBehavior(state.x, state.direction, minimum, maximum, state.continuous);
+    if (edge.stop) {
+      stopAvatarWalk(true); // Preserve the original screen-edge behavior.
+    } else if (edge.x !== state.x) {
+      // Development observation loop: re-enter at the opposite edge without
+      // changing walking direction or the animation cycle.
+      state.x = edge.x;
+      avatarBounds = { ...avatarBounds, x: Math.round(state.x) };
+      syncAvatarViewport();
     }
   }, movementIntervalMs(renderFrameRate));
 }
@@ -867,6 +895,8 @@ function menuState() {
     modelName: currentModelFile ? path.basename(currentModelFile) : '未選択',
     textSize: menuTextSize,
     viewState: menuViewState,
+    developmentMode: !app.isPackaged,
+    devWalkDirection,
     motionStatus: idleDiagnostics.split('\n')[0],
     motionLabStatus,
     motionWarpEnabled,
@@ -911,6 +941,7 @@ function finishMenuHide(generation) {
   if (menuHideTimer) clearTimeout(menuHideTimer);
   menuHideTimer = null;
   menuWindow.hide();
+  updateAvatarMousePassThrough();
 }
 
 function closeAvatarMenu(force = false) {
@@ -926,6 +957,7 @@ function closeAvatarMenu(force = false) {
     menuWindow = null;
     menuPrepared = false;
     popup.destroy();
+    updateAvatarMousePassThrough();
     return;
   }
   if (!menuWindow.isVisible() || menuClosing) {
@@ -989,6 +1021,7 @@ function createAvatarMenuWindow() {
       menuWindow = null;
       menuPrepared = false;
       menuClosing = false;
+      updateAvatarMousePassThrough();
     }
   });
   popup.loadFile(path.join(__dirname, 'avatar-menu.html')).catch(error => {
@@ -1020,6 +1053,7 @@ function showAvatarMenu() {
   // already available; optional VoiSona status refresh happens afterward.
   popup.webContents.send('avatar-menu:open', generation, menuState());
   popup.show();
+  updateAvatarMousePassThrough();
   popup.focus();
   void voisonaManager.refresh().then(() => {
     if (menuWindow === popup && !popup.isDestroyed() && popup.isVisible() &&
@@ -1074,12 +1108,45 @@ function openReferenceLab() {
     .catch(error => console.error('[FRAME Reference Lab] load failed:', error));
 }
 
+function restartDevelopmentFrame() {
+  if (app.isPackaged) throw new Error('再起動は開発版FRAME専用です');
+  if (devRestartRequested) throw new Error('再起動はすでに要求されています');
+  const helper = path.join(app.getAppPath(), 'scripts', 'frame-dev-restart.cjs');
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+  const child = spawn(process.execPath,
+    [helper, String(process.pid), app.getAppPath(), app.getPath('userData')], {
+      cwd: app.getAppPath(), detached: true, stdio: 'ignore',
+      windowsHide: true, env
+    });
+  if (!child.pid) throw new Error('再起動処理を開始できませんでした');
+  child.unref();
+  devRestartRequested = true;
+  app.quit(); // Existing exit animation and VoiSona shutdown are preserved.
+  return 'FRAMEを終了し、最新コードで npm start を実行します';
+}
+
 async function executeMenuAction(action, value) {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('モデル画面がありません');
   if (motionLabSession && (action === 'model.change' || action.startsWith('motion.'))) {
     throw new Error('歩行撮影が終わってから操作してください');
   }
   switch (action) {
+    case 'dev.restart':
+      return restartDevelopmentFrame();
+    case 'dev.walkLeft':
+    case 'dev.walkRight': {
+      if (motionLabSession) throw new Error('歩行撮影中は歩行操作できません');
+      const direction = action === 'dev.walkLeft' ? -1 : 1;
+      devWalkDirection = direction;
+      if (walkState && walkState.direction === direction) walkState.continuous = true;
+      mainWindow.webContents.send('avatar:motion-command', { type: 'walk', direction, continuous: true });
+      return direction < 0 ? '左へ連続歩行中（画面端で反対側へ移動）' :
+        '右へ連続歩行中（画面端で反対側へ移動）';
+    }
+    case 'dev.walkStop':
+      stopAvatarWalk();
+      mainWindow.webContents.send('avatar:motion-command', { type: 'walk-stop' });
+      return '連続歩行を停止します';
     case 'diagnostic.motionCapture': {
       if (!currentModelFile) throw new Error('先にMMDモデルを読み込んでください');
       if (motionLabSession) throw new Error('歩行撮影はすでに実行中です');
@@ -1128,8 +1195,11 @@ async function executeMenuAction(action, value) {
       return 'VMDを送信しました: ' + motion.name;
     }
     case 'motion.walkLeft': case 'motion.walkRight':
+      devWalkDirection = 0;
+      if (walkState) walkState.continuous = false;
       mainWindow.webContents.send('avatar:motion-command', {
-        type: 'walk', direction: action === 'motion.walkLeft' ? -1 : 1
+        type: 'walk', direction: action === 'motion.walkLeft' ? -1 : 1,
+        continuous: false
       });
       return action === 'motion.walkLeft' ? '左へ歩きます' : '右へ歩きます';
     case 'motion.walkStop':
@@ -1593,13 +1663,16 @@ app.whenReady().then(async () => {
   ipcMain.on('avatar-menu:close-complete', (event, generation) => {
     if (isMenuWindow(event) && Number.isInteger(generation)) finishMenuHide(generation);
   });
-  ipcMain.on('avatar:walk-velocity', (event, direction, speed) => {
+  ipcMain.on('avatar:walk-velocity', (event, direction, speed, continuous) => {
     if (!isOurWindow(event)) return;
     if (direction === 0) {
       stopAvatarWalk();
     } else if ([-1, 1].includes(direction) && Number.isFinite(speed) &&
                speed >= 0 && speed <= 1000 && currentModelFile && !exitWarpPending) {
-      beginAvatarWalk(direction, speed);
+      beginAvatarWalk(direction, speed, continuous === true);
+      if (menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()) {
+        menuWindow.webContents.send('avatar-menu:state-update', menuState());
+      }
     }
   });
   ipcMain.on('avatar:zoom', (event, action) => {
