@@ -107,6 +107,8 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     const torsoTwist = 20 * armSwing;
     key('upper', frame, quaternionMultiply(QY((-sign * 78 + torsoTwist) * DEG), QZ(-2.5 * DEG * cycle)));
     // Counter the change from the previous chest yaw to keep the face steady.
+    // TODO: When a model without an upper-body bone is available, recheck whether
+    // the neck counter-rotation acts alone. Do not change behavior until verified.
     key('neck', frame, QY((sign * 8 - 1.5 * cycle - torsoTwist) * DEG));
     // Groove moves the torso/leg roots, not the independent planted IK
     // targets. Model-local +Z is the left support side after the hip yaw;
@@ -121,10 +123,10 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     // existing idle motion so hands are less likely to cut through clothing.
     // Torso yaw already handles travel direction; local arm swing must not
     // reverse again when walking left. Standard MMD elbows bend about Y.
-    // Bias slightly forwards and widen the swing so the leading hand clears
-    // the torso. Left/right remain half a cycle apart, opposite their legs.
-    // Add up to 8 degrees only on the backswing, smoothly at the crossover.
-    // The approved forward half of the shoulder motion stays identical.
+    // Add an 8-degree forward bias and widen the swing from 16 to 28 degrees.
+    // On the backswing, subtract up to another 8 degrees of pitch smoothly.
+    // Both halves now differ from the previous gait; left/right remain half a
+    // cycle apart, opposite their legs.
     const armPitch = swing => (8 + 28 * swing - 8 * Math.min(0, swing) ** 2) * DEG;
     key('leftArm', frame, quaternionMultiply(QX(armPitch(armSwing)), QZ(-50 * DEG)));
     key('rightArm', frame, quaternionMultiply(QX(armPitch(-armSwing)), QZ(50 * DEG)));
