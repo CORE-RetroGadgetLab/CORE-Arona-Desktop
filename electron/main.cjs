@@ -13,7 +13,8 @@ const { beginReferenceCapture, saveReferenceImage, finishReferenceCapture,
   writeReferenceComparison, pruneReferenceCaptures } = require('./reference-lab.cjs');
 const { DEFAULT_FRAME_RATE, FRAME_RATE_OPTIONS, normalizeFrameRate, movementIntervalMs } = require('./frame-rate.cjs');
 const {
-  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode, clampAvatarPosition,
+  stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode,
+  walkEdgeBehavior, clampAvatarPosition,
   avatarMovementLimits, unboundedOverlayZoom, scaleAvatarHitRectangles
 } = require('./avatar-overlay.cjs');
 const { scanMotionLibrary, readMotionFile } = require('./motion-library.cjs');
@@ -717,17 +718,15 @@ function beginAvatarWalk(direction, speed) {
       avatarBounds = { ...bounds, x: next };
       syncAvatarViewport();
     }
-    if ((state.direction > 0 && state.x >= maximum) ||
-        (state.direction < 0 && state.x <= minimum)) {
-      if (state.continuous) {
-        // Development observation loop: re-enter from the opposite edge,
-        // preserving direction and gait phase. Ordinary walks still stop.
-        state.x = state.direction > 0 ? minimum : maximum;
-        avatarBounds = { ...avatarBounds, x: Math.round(state.x) };
-        syncAvatarViewport();
-      } else {
-        stopAvatarWalk(true); // Preserve the original screen-edge behavior.
-      }
+    const edge = walkEdgeBehavior(state.x, state.direction, minimum, maximum, state.continuous);
+    if (edge.stop) {
+      stopAvatarWalk(true); // Preserve the original screen-edge behavior.
+    } else if (edge.x !== state.x) {
+      // Development observation loop: re-enter at the opposite edge without
+      // changing walking direction or the animation cycle.
+      state.x = edge.x;
+      avatarBounds = { ...avatarBounds, x: Math.round(state.x) };
+      syncAvatarViewport();
     }
   }, movementIntervalMs(renderFrameRate));
 }
