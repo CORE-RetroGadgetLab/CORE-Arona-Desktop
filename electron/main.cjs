@@ -12,6 +12,7 @@ const { requestDirectory, resultName, validateRequest, REQUEST_NAME } =
 const { beginReferenceCapture, saveReferenceImage, finishReferenceCapture,
   writeReferenceComparison, pruneReferenceCaptures } = require('./reference-lab.cjs');
 const { DEFAULT_FRAME_RATE, FRAME_RATE_OPTIONS, normalizeFrameRate, movementIntervalMs } = require('./frame-rate.cjs');
+const { walkFrameSeconds } = require('./walk-sync.cjs');
 const {
   stageInDisplay, cursorHitsStageRects, sanitizeHitRectangles, avatarMouseInputMode,
   walkEdgeBehavior, clampAvatarPosition,
@@ -114,7 +115,6 @@ let proxyStartup = null;
 let currentModelFile = null;
 let dragTimer = null;
 let dragStart = null;
-let walkTimer = null;
 let walkState = null;
 let devWalkDirection = 0;
 let devRestartRequested = false;
@@ -682,8 +682,6 @@ function startAvatarHitPolling() {
 // Native window motion is driven here rather than by DOM mouse deltas, which
 // are unreliable while a transparent, shaped Electron window is moving.
 function stopAvatarWalk(notify = false) {
-  if (walkTimer !== null) clearInterval(walkTimer);
-  walkTimer = null;
   walkState = null;
   devWalkDirection = 0;
   if (notify && mainWindow && !mainWindow.isDestroyed()) {
@@ -692,49 +690,57 @@ function stopAvatarWalk(notify = false) {
 }
 
 function beginAvatarWalk(direction, speed, continuous = false) {
-  stopAvatarWalk();
-  if (continuous) devWalkDirection = direction;
   if (!mainWindow || mainWindow.isDestroyed() ||
-      ![-1, 1].includes(direction) || !Number.isFinite(speed)) return;
-  stopAvatarDrag();
+      ![-1, 1].includes(direction) || !Number.isFinite(speed)) {
+    stopAvatarWalk();
+    return;
+  }
   const actualSpeed = Math.max(20, Math.min(360, speed));
+  // Changing from ordinary to continuous walking must not restart its clock.
+  if (walkState && walkState.direction === direction &&
+      Math.abs(walkState.speed - actualSpeed) < 0.001) {
+    walkState.continuous = continuous;
+    devWalkDirection = continuous ? direction : 0;
+    return;
+  }
+  stopAvatarWalk();
+  stopAvatarDrag();
+  if (!avatarBounds) return;
+  if (continuous) devWalkDirection = direction;
+  walkState = { direction, speed: actualSpeed, x: avatarBounds.x,
+    lastFrame: null, continuous };
+}
+
+// The renderer sends the ACTUAL MMD frame used to solve each IK pose.
+// Independent setInterval movement caused the planted foot to jitter as
+// Babylon render frames and native window steps drifted out of phase.
+function advanceAvatarWalk(frameTime) {
+  const state = walkState;
+  if (!state || !mainWindow || mainWindow.isDestroyed()) return;
+  const seconds = walkFrameSeconds(state.lastFrame, frameTime);
+  if (!Number.isFinite(frameTime)) return;
+  state.lastFrame = frameTime;
+  if (seconds <= 0 || !avatarBounds) return;
+
   const bounds = avatarBounds;
-  if (!bounds) return;
-  walkState = { direction, speed: actualSpeed, x: bounds.x,
-    last: performance.now(), continuous };
-  walkTimer = setInterval(() => {
-    const state = walkState;
-    if (!state || !mainWindow || mainWindow.isDestroyed()) {
-      stopAvatarWalk();
-      return;
-    }
-    const bounds = avatarBounds;
-    // Use model silhouette rather than stage edges. Permit most of the body
-    // to exit the monitor, but stop with a grab-able section remaining.
-    const area = avatarDisplay().bounds;
-    const limits = avatarMovementLimits(bounds, area, avatarHitRects);
-    const minimum = limits.minX;
-    const maximum = limits.maxX;
-    const now = performance.now();
-    const dt = Math.max(0, Math.min(0.1, (now - state.last) / 1000));
-    state.last = now;
-    state.x = Math.min(maximum, Math.max(minimum, state.x + state.direction * state.speed * dt));
-    const next = Math.round(state.x);
-    if (next !== bounds.x) {
-      avatarBounds = { ...bounds, x: next };
-      syncAvatarViewport();
-    }
-    const edge = walkEdgeBehavior(state.x, state.direction, minimum, maximum, state.continuous);
-    if (edge.stop) {
-      stopAvatarWalk(true); // Preserve the original screen-edge behavior.
-    } else if (edge.x !== state.x) {
-      // Development observation loop: re-enter at the opposite edge without
-      // changing walking direction or the animation cycle.
-      state.x = edge.x;
-      avatarBounds = { ...avatarBounds, x: Math.round(state.x) };
-      syncAvatarViewport();
-    }
-  }, movementIntervalMs(renderFrameRate));
+  const area = avatarDisplay().bounds;
+  const { minX, maxX } = avatarMovementLimits(bounds, area, avatarHitRects);
+  state.x = Math.min(maxX, Math.max(minX,
+    state.x + state.direction * state.speed * seconds));
+  const next = Math.round(state.x);
+  if (next !== bounds.x) {
+    avatarBounds = { ...bounds, x: next };
+    syncAvatarViewport();
+  }
+  const edge = walkEdgeBehavior(state.x, state.direction,
+    minX, maxX, state.continuous);
+  if (edge.stop) {
+    stopAvatarWalk(true);
+  } else if (edge.x !== state.x) {
+    state.x = edge.x;
+    avatarBounds = { ...avatarBounds, x: Math.round(state.x) };
+    syncAvatarViewport();
+  }
 }
 
 function stopAvatarDrag() {
@@ -1298,8 +1304,8 @@ async function executeMenuAction(action, value) {
       await saveModelSelection();
       // Changing settings doesn't interrupt a gait or a held mouse drag.
       // Recreate only their cadence timers; both preserve their location.
-      if (walkState) beginAvatarWalk(walkState.direction, walkState.speed);
-      else if (dragStart) startAvatarDrag();
+      // Native walking is animation-frame-driven; only drag uses a timer.
+      if (dragStart) startAvatarDrag();
       mainWindow.webContents.send('avatar:frame-rate', renderFrameRate);
       return '描画・モーション・移動の上限: ' + requested + ' FPS';
     }
@@ -1690,6 +1696,9 @@ app.whenReady().then(async () => {
   });
   ipcMain.on('avatar-menu:close-complete', (event, generation) => {
     if (isMenuWindow(event) && Number.isInteger(generation)) finishMenuHide(generation);
+  });
+  ipcMain.on('avatar:walk-frame', (event, frameTime) => {
+    if (isOurWindow(event) && !exitWarpPending) advanceAvatarWalk(frameTime);
   });
   ipcMain.on('avatar:walk-velocity', (event, direction, speed, continuous) => {
     if (!isOurWindow(event)) return;
