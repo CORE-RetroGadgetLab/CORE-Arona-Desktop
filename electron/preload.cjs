@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('aronaDesktop', Object.freeze({
   onPrepareQuit: callback => ipcRenderer.on('avatar:prepare-quit', () => callback()),
   showMenu: () => ipcRenderer.send('avatar:menu'),
   reportIdleStatus: (text) => ipcRenderer.send('avatar:idle-status', text),
+  reportPhysicsFailure: (text) => ipcRenderer.send('avatar:physics-failed', String(text).slice(0, 300)),
   synthesizeSpeech: (request) => ipcRenderer.invoke('avatar:voice-synthesize', request),
   onVoiceCommand: callback => ipcRenderer.on('avatar:voice-command', (_event, command) => callback(command)),
   cancelVoice: () => ipcRenderer.send('avatar:voice-cancel'),

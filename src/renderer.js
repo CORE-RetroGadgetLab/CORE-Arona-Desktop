@@ -69,9 +69,46 @@ ambient.intensity = 1.15;
 const keyLight = new DirectionalLight('key', new Vector3(-0.6, -1, 0.8), scene);
 keyLight.intensity = 0.65;
 
-const mmdRuntime = new MmdRuntime(scene, null);
-mmdRuntime.loggingEnabled = true;
-mmdRuntime.register(scene);
+let mmdRuntime = null;
+let physicsEnabled = false;
+let physicsRuntime = null;
+let runtimeInitialization = null;
+
+async function initializeMmdRuntime(requestPhysics) {
+  if (runtimeInitialization) return runtimeInitialization;
+  runtimeInitialization = (async () => {
+    let physics = null;
+    if (requestPhysics) {
+      try {
+        // Load bundled single-threaded Bullet WASM only in PHYSICS ALL mode.
+        // Keep the existing JS MMD runtime to preserve current motion behavior.
+        const [wasm, instanceType, simulation, bullet] = await Promise.all([
+          import('babylon-mmd/esm/Runtime/Optimized/mmdWasmInstance'),
+          import('babylon-mmd/esm/Runtime/Optimized/InstanceType/singlePhysicsRelease'),
+          import('babylon-mmd/esm/Runtime/Optimized/Physics/Bind/Impl/multiPhysicsRuntime'),
+          import('babylon-mmd/esm/Runtime/Optimized/Physics/mmdBulletPhysics')
+        ]);
+        const wasmInstance = await wasm.GetMmdWasmInstance(new instanceType.MmdWasmInstanceTypeSPR());
+        physicsRuntime = new simulation.MultiPhysicsRuntime(wasmInstance);
+        physicsRuntime.setGravity(new Vector3(0, -98, 0));
+        physicsRuntime.register(scene);
+        physics = new bullet.MmdBulletPhysics(physicsRuntime);
+        physicsEnabled = true;
+      } catch (error) {
+        console.error('[FRAME physics] Bullet initialization failed:', error);
+        physicsRuntime?.unregister();
+        physicsRuntime?.dispose();
+        physicsRuntime = null;
+        physicsEnabled = false;
+        window.aronaDesktop.reportPhysicsFailure('Bullet初期化: ' + String(error?.message ?? error));
+      }
+    }
+    mmdRuntime = new MmdRuntime(scene, physics);
+    mmdRuntime.loggingEnabled = true;
+    mmdRuntime.register(scene);
+  })();
+  return runtimeInitialization;
+}
 const idleLoader = new VmdLoader(scene);
 idleLoader.loggingEnabled = true;
 
@@ -362,7 +399,16 @@ async function attachIdleMotion(container) {
   const rootMesh = container.meshes[0];
   if (!rootMesh) throw new Error('MMD root mesh is not available');
 
-  const runtimeModel = mmdRuntime.createMmdModel(rootMesh, { buildPhysics: false });
+  let runtimeModel;
+  try {
+    // Enable all PMX-defined rigid bodies and joints, not selected body parts.
+    runtimeModel = mmdRuntime.createMmdModel(rootMesh, { buildPhysics: physicsEnabled });
+  } catch (error) {
+    if (physicsEnabled) {
+      window.aronaDesktop.reportPhysicsFailure('剛体・Joint生成: ' + String(error?.message ?? error));
+    }
+    throw error;
+  }
   const boneNames = runtimeModel.runtimeBones.map(bone => bone.name);
   const morphNames = ['まばたき', 'blink', 'Blink'].filter(name =>
     (runtimeModel.morph.getMorphIndices(name)?.length ?? 0) > 0
@@ -831,6 +877,8 @@ async function loadModel(model, { startup = false } = {}) {
   let nextMmdModel = null;
 
   try {
+    await initializeMmdRuntime(model.physicsEnabled === true);
+    if (seq !== loadSequence) return;
     nextContainer = await LoadAssetContainerAsync(model.url, scene, {
       pluginOptions: {
         mmdmodel: {

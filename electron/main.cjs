@@ -118,6 +118,8 @@ let walkTimer = null;
 let walkState = null;
 let devWalkDirection = 0;
 let devRestartRequested = false;
+let physicsEnabled = false;
+let physicsLastError = '';
 let idleDiagnostics = 'モーションの読み込みを待っています';
 let motionLabSession = null;
 let motionLabTimeout = null;
@@ -455,7 +457,8 @@ function infoForCurrentModel() {
     url: SCHEME + '://model/' + encodeURIComponent(path.basename(currentModelFile)),
     motionWarpEnabled,
     motionTransitionMode,
-    renderFrameRate
+    renderFrameRate,
+    physicsEnabled: !app.isPackaged && physicsEnabled
   };
 }
 
@@ -478,6 +481,8 @@ async function restoreModelSelection() {
     if (typeof settings.motionWarpEnabled === 'boolean') motionWarpEnabled = settings.motionWarpEnabled;
     if (['auto', 'blend', 'warp'].includes(settings.motionTransitionMode)) motionTransitionMode = settings.motionTransitionMode;
     renderFrameRate = normalizeFrameRate(settings.renderFrameRate);
+    physicsEnabled = !app.isPackaged && settings.physicsEnabled === true;
+    if (typeof settings.physicsLastError === 'string') physicsLastError = settings.physicsLastError.slice(0, 300);
     if (typeof settings.modelPath !== 'string') return;
     if (!['.pmx', '.pmd'].includes(path.extname(settings.modelPath).toLowerCase())) return;
     const stats = await fs.stat(settings.modelPath);
@@ -501,7 +506,9 @@ async function saveModelSelection() {
     motionSelectedId,
     motionWarpEnabled,
     motionTransitionMode,
-    renderFrameRate
+    renderFrameRate,
+    physicsEnabled,
+    physicsLastError
   }, null, 2), 'utf8');
 }
 
@@ -897,6 +904,8 @@ function menuState() {
     viewState: menuViewState,
     developmentMode: !app.isPackaged,
     devWalkDirection,
+    physicsEnabled: !app.isPackaged && physicsEnabled,
+    physicsLastError,
     motionStatus: idleDiagnostics.split('\n')[0],
     motionLabStatus,
     motionWarpEnabled,
@@ -1133,6 +1142,24 @@ async function executeMenuAction(action, value) {
   switch (action) {
     case 'dev.restart':
       return restartDevelopmentFrame();
+    case 'dev.physicsToggle': {
+      if (app.isPackaged) throw new Error('物理演算切り替えは開発版専用です');
+      if (motionLabSession) throw new Error('歩行撮影が終わってから切り替えてください');
+      const previous = physicsEnabled;
+      const previousError = physicsLastError;
+      physicsEnabled = !previous;
+      physicsLastError = '';
+      try {
+        await saveModelSelection();
+        // MmdRuntime owns physics, so rebuild it by restarting FRAME.
+        return restartDevelopmentFrame();
+      } catch (error) {
+        physicsEnabled = previous;
+        physicsLastError = previousError;
+        await saveModelSelection();
+        throw error;
+      }
+    }
     case 'dev.walkLeft':
     case 'dev.walkRight': {
       if (motionLabSession) throw new Error('歩行撮影中は歩行操作できません');
@@ -1148,6 +1175,7 @@ async function executeMenuAction(action, value) {
       mainWindow.webContents.send('avatar:motion-command', { type: 'walk-stop' });
       return '連続歩行を停止します';
     case 'diagnostic.motionCapture': {
+      if (physicsEnabled) throw new Error('物理演算ON時の撮影は再現性を保証できません。PHYSICS ALLをOFFにしてください');
       if (!currentModelFile) throw new Error('先にMMDモデルを読み込んでください');
       if (motionLabSession) throw new Error('歩行撮影はすでに実行中です');
       const session = await beginMotionLab(motionLabFolder());
@@ -1768,6 +1796,15 @@ app.whenReady().then(async () => {
   ipcMain.on('avatar:idle-status', (event, diagnostic) => {
     if (!isOurWindow(event) || typeof diagnostic !== 'string') return;
     idleDiagnostics = diagnostic.slice(0, 3500);
+  });
+  ipcMain.on('avatar:physics-failed', (event, diagnostic) => {
+    if (!isOurWindow(event) || !physicsEnabled || devRestartRequested) return;
+    physicsEnabled = false;
+    physicsLastError = String(diagnostic ?? '物理エンジンの初期化失敗').slice(0, 300);
+    console.error('[FRAME physics] reverting to OFF:', physicsLastError);
+    void saveModelSelection().then(() => {
+      if (!app.isPackaged && !devRestartRequested) restartDevelopmentFrame();
+    }).catch(error => console.error('[FRAME physics] automatic recovery failed:', error));
   });
   ipcMain.on('avatar:drag-start', event => {
     if (isOurWindow(event)) startAvatarDrag();

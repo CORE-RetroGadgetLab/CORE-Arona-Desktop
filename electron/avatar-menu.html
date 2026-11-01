@@ -47,6 +47,10 @@
       <button type="button" class="row danger" data-action="dev.walkStop" id="dev-walk-stop">連続歩行を停止</button>
       <p class="hint">画面端に到達すると反対端から同じ方向で再登場します。通常の「モーション」タブの歩行は従来どおり画面端で停止します。</p>
       <p class="hint" id="dev-walk-status">歩行停止中</p>
+      <div class="section-title gap"><span>PHYSICS ALL</span><small>実験機能</small></div>
+      <button type="button" class="row" id="dev-physics-toggle" data-action="dev.physicsToggle" aria-pressed="false">全物理演算 OFF</button>
+      <p class="hint">PMXに設定された髪・スカート・衣装などの剛体とJointを一括適用。切り替え時はFRAMEを再起動します。初期値OFF。</p>
+      <p class="hint" id="dev-physics-status">物理演算OFF（標準動作）</p>
     </section>
     <section class="page" data-page="home" hidden>
       <div class="section-title"><span>MODEL</span><small>キャラクター</small></div>

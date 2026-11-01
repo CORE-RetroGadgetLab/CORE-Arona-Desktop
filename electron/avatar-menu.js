@@ -136,6 +136,15 @@ function renderState(state) {
   const restarting = document.getElementById('dev-restart');
   restarting.disabled = !state.developmentMode;
   restarting.title = state.developmentMode ? 'npm start をビルドから再実行' : '開発版FRAME専用です';
+  const physicsOn = state.physicsEnabled === true;
+  const physicsToggle = document.getElementById('dev-physics-toggle');
+  physicsToggle.textContent = '全物理演算 ' + (physicsOn ? 'ON' : 'OFF');
+  physicsToggle.setAttribute('aria-pressed', String(physicsOn));
+  physicsToggle.disabled = !state.developmentMode;
+  physicsToggle.title = state.developmentMode ? '設定保存後にFRAMEを再起動' : '開発版FRAME専用です';
+  document.getElementById('dev-physics-status').textContent = state.physicsLastError
+    ? '物理演算をOFFへ自動復旧しました: ' + state.physicsLastError
+    : physicsOn ? 'Bullet WASM / PMXの全剛体・Jointを有効化' : '物理演算OFF（標準動作）';
   document.getElementById('dev-walk-status').textContent = state.devWalkDirection === -1
     ? '左へ連続歩行中' : state.devWalkDirection === 1
       ? '右へ連続歩行中' : '歩行停止中';
@@ -295,7 +304,7 @@ const keepOpen = new Set([
   'motion.folder', 'motion.refresh', 'motion.preview', 'motion.next',
   'motion.previous', 'motion.setIdle', 'motion.stop', 'motion.resetIdle', 'motion.warpToggle',
   'motion.transition', 'render.fps',
-  'dev.walkLeft', 'dev.walkRight', 'dev.walkStop'
+  'dev.walkLeft', 'dev.walkRight', 'dev.walkStop', 'dev.physicsToggle'
 ]);
 async function runAction(action, value) {
   if (busy) return;
