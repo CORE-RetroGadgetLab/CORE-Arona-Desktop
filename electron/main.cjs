@@ -684,8 +684,7 @@ function stopAvatarWalk(notify = false) {
   }
 }
 
-function beginAvatarWalk(direction, speed) {
-  const continuous = devWalkDirection === direction;
+function beginAvatarWalk(direction, speed, continuous = false) {
   stopAvatarWalk();
   if (continuous) devWalkDirection = direction;
   if (!mainWindow || mainWindow.isDestroyed() ||
@@ -1140,7 +1139,7 @@ async function executeMenuAction(action, value) {
       const direction = action === 'dev.walkLeft' ? -1 : 1;
       devWalkDirection = direction;
       if (walkState && walkState.direction === direction) walkState.continuous = true;
-      mainWindow.webContents.send('avatar:motion-command', { type: 'walk', direction });
+      mainWindow.webContents.send('avatar:motion-command', { type: 'walk', direction, continuous: true });
       return direction < 0 ? '左へ連続歩行中（画面端で反対側へ移動）' :
         '右へ連続歩行中（画面端で反対側へ移動）';
     }
@@ -1199,7 +1198,8 @@ async function executeMenuAction(action, value) {
       devWalkDirection = 0;
       if (walkState) walkState.continuous = false;
       mainWindow.webContents.send('avatar:motion-command', {
-        type: 'walk', direction: action === 'motion.walkLeft' ? -1 : 1
+        type: 'walk', direction: action === 'motion.walkLeft' ? -1 : 1,
+        continuous: false
       });
       return action === 'motion.walkLeft' ? '左へ歩きます' : '右へ歩きます';
     case 'motion.walkStop':
@@ -1663,13 +1663,16 @@ app.whenReady().then(async () => {
   ipcMain.on('avatar-menu:close-complete', (event, generation) => {
     if (isMenuWindow(event) && Number.isInteger(generation)) finishMenuHide(generation);
   });
-  ipcMain.on('avatar:walk-velocity', (event, direction, speed) => {
+  ipcMain.on('avatar:walk-velocity', (event, direction, speed, continuous) => {
     if (!isOurWindow(event)) return;
     if (direction === 0) {
       stopAvatarWalk();
     } else if ([-1, 1].includes(direction) && Number.isFinite(speed) &&
                speed >= 0 && speed <= 1000 && currentModelFile && !exitWarpPending) {
-      beginAvatarWalk(direction, speed);
+      beginAvatarWalk(direction, speed, continuous === true);
+      if (menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()) {
+        menuWindow.webContents.send('avatar-menu:state-update', menuState());
+      }
     }
   });
   ipcMain.on('avatar:zoom', (event, action) => {
