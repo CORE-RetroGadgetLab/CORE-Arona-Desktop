@@ -37,8 +37,15 @@ function asciiBytes(s) {
 
 function encodeName(name, size) {
   let bytes;
-  if (SHIFT_JIS[name]) {
-    bytes = SHIFT_JIS[name].match(/../g).map(byte => parseInt(byte, 16));
+  const finger = /^([左右])(親指|人指|中指|薬指|小指)([０-３0-3])$/.exec(name);
+  const fingerHex = { '親指': '90658e77', '人指': '906c8e77', '中指': '92868e77', '薬指': '96f28e77', '小指': '8fac8e77' };
+  const encoded = SHIFT_JIS[name] ?? (finger &&
+    (finger[1] === '左' ? '8db6' : '8945') + fingerHex[finger[2]] +
+    (finger[3].charCodeAt(0) > 127
+      ? '82' + (0x4f + Number(finger[3].normalize('NFKC'))).toString(16)
+      : finger[3].charCodeAt(0).toString(16)));
+  if (encoded) {
+    bytes = encoded.match(/../g).map(byte => parseInt(byte, 16));
   } else if (/^[\x20-\x7e]+$/.test(name)) {
     bytes = asciiBytes(name);
   } else {

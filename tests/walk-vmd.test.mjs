@@ -2,13 +2,34 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   WALK_FRAMES, WALK_STANCE, WALK_SECONDS, WALK_STRIDE_HEIGHT_RATIO,
-  walkFootAt, walkTravelSpeed, resolveWalkBones, buildWalkingVmd
+  walkFootAt, walkTravelSpeed, resolveWalkBones, buildWalkingVmd, walkArmPitchAt
 } from '../src/walk-vmd.mjs';
 
 const bones = [
   '左足ＩＫ', '右足ＩＫ', '左腕', '右腕', '左ひじ', '右ひじ',
   '上半身', '下半身', '首', 'グルーブ'
 ];
+
+test('arm approach and return slow to 0.8 at both ends without changing extrema', () => {
+  const degrees = radians => radians * 180 / Math.PI;
+  const previous = swing => swing > 0
+    ? 8 + 9 * (1 - (1 - swing) ** (28 / 9))
+    : 8 + 28 * swing + 3 * swing ** 2;
+  assert.ok(Math.abs(degrees(walkArmPitchAt(1)) - 17) < 1e-9);
+  assert.ok(Math.abs(degrees(walkArmPitchAt(-1)) + 17) < 1e-9);
+  const delta = 1e-5;
+  for (const swing of [-0.95, -0.8, 0.2, 0.6]) {
+    assert.ok(Math.abs(degrees(walkArmPitchAt(swing))) >= 10);
+    const ratio = (walkArmPitchAt(swing + delta) - walkArmPitchAt(swing - delta)) * 180 / Math.PI /
+      (previous(swing + delta) - previous(swing - delta));
+    assert.ok(Math.abs(ratio - 0.8) < 1e-5, 'angular speed scales equally in either direction');
+  }
+  for (let i = 0; i <= 200; i++) {
+    const swing = -1 + i / 100;
+    assert.ok(Math.abs(degrees(walkArmPitchAt(swing))) <= 17.000001);
+    if (i) assert.ok(walkArmPitchAt(swing) >= walkArmPitchAt(swing - 0.01), 'no reversal within a stroke');
+  }
+});
 
 function extractVmd(buffer) {
   const view = new DataView(buffer);
@@ -36,6 +57,22 @@ test('both standard Japanese and English foot IK rigs are recognized', () => {
   assert.equal(actual.rightIK, '右足ＩＫ');
   assert.equal(resolveWalkBones(['LeftLegIK','RightLegIK']).leftIK, 'LeftLegIK');
   assert.equal(resolveWalkBones(['左足IK','右足IK']).rightIK, '右足IK');
+});
+
+test('walking gently curls available fingers on both hands and encodes their names', () => {
+  const fingers = ['左人指１', '右人指１', '左中指2', '右中指2', '左親指０', '右親指０'];
+  const samples = extractVmd(buildWalkingVmd({ boneNames: [...bones, ...fingers] }).buffer);
+  for (const name of fingers) {
+    const keys = samples.filter(s => s.name === name);
+    assert.equal(keys.length, WALK_FRAMES / 2 + 1);
+    assert.deepEqual(keys[0].quat, keys.at(-1).quat);
+    assert.ok(keys.every(k => k.quat.every(Number.isFinite)));
+    const axis = name.includes('親指') ? 1 : 2;
+    assert.ok(keys[0].quat[axis] * (name.startsWith('左') ? -1 : 1) > 0);
+    const degrees = 2 * Math.acos(keys[0].quat[3]) * 180 / Math.PI;
+    assert.ok(degrees > 5 && degrees < 35, 'finger curl is relaxed');
+  }
+  assert.equal(samples.length, (bones.length + fingers.length) * (WALK_FRAMES / 2 + 1));
 });
 
 test('procedural walk rejects PMX models without both legs IK', () => {
@@ -69,8 +106,8 @@ test('walking chest and hips face the direction of travel while head stays sligh
     const chestYaw = yawDegrees(atStart('上半身').quat);
     const hipYaw = yawDegrees(atStart('下半身').quat);
     const neckYaw = yawDegrees(atStart('首').quat);
-    const initialTwist = 20 * Math.sin(-2 * Math.PI * WALK_STANCE / 2);
-    assert.ok(Math.abs(chestYaw + direction * 78 - initialTwist) < 0.2, 'chest follows arm phase with a larger twist');
+    const initialTwist = 10 * Math.sin(-2 * Math.PI * WALK_STANCE / 2);
+    assert.ok(Math.abs(chestYaw + direction * 90 - initialTwist) < 0.2, 'chest twists around the travel heading');
     assert.ok(Math.abs(hipYaw + direction * 90 - 8) < 0.2, 'left-leading pose twists the left hip forwards by eight degrees');
     for (const hip of samples.filter(s => s.name === '下半身')) {
       const phase = hip.frame / WALK_FRAMES;
@@ -85,18 +122,21 @@ test('walking chest and hips face the direction of travel while head stays sligh
       assert.ok(Math.abs(yawDegrees(sample.quat) + direction * 90) < 0.2,
         'both foot IK headings stay aligned with travel throughout the cycle');
     }
-    assert.ok(Math.abs(neckYaw - direction * 8 + initialTwist) < 0.2, 'neck compensates torso twist');
+    assert.ok(Math.abs(neckYaw - direction * 20 + initialTwist) < 0.2, 'neck compensates torso twist');
     assert.ok(Math.abs(chestYaw + neckYaw + direction * 70) < 0.2, 'combined head yaw preserves its original heading');
     assert.ok(chestYaw * hipYaw > 0, 'torso and hips must face the same travel direction');
     for (const chest of samples.filter(s => s.name === '上半身')) {
       const at = name => samples.find(s => s.name === name && s.frame === chest.frame);
       const pitch = q => 2 * Math.atan2(q[0], q[3]);
       const armDifference = pitch(at('左腕').quat) - pitch(at('右腕').quat);
-      const twist = yawDegrees(chest.quat) + direction * 78;
+      const twist = yawDegrees(chest.quat) + direction * 90;
       // Positive local yaw brings the left shoulder (+X) forwards (-Z),
       // negative yaw brings the right shoulder forwards and the left back.
       assert.ok(twist * armDifference > 0, 'each shoulder follows its own arm forwards and backwards');
-      assert.ok(Math.abs(twist) <= 20.01, 'twist stays within twenty degrees');
+      assert.ok(Math.abs(twist) <= 10.01, 'twist stays within ten degrees');
+      const cycle = Math.sin(2 * Math.PI * chest.frame / WALK_FRAMES);
+      assert.ok(Math.abs(yawDegrees(chest.quat) + yawDegrees(at('首').quat) + direction * 70 + 1.5 * cycle) < 0.2,
+        'face keeps its twenty-degree camera opening through the full cycle');
     }
   }
 });
@@ -153,7 +193,7 @@ test('arms oppose the ipsilateral foot without reversing local swing on a left t
       assert.ok(leadingPitch > 16 && leadingPitch <= 17.01, 'opposite arm swings forwards up to seventeen degrees');
       const trailingArm = footForward > 0 ? at('左腕') : at('右腕');
       const trailingPitch = armPitch(trailingArm.quat);
-      assert.ok(trailingPitch < -24 && trailingPitch >= -28.01, 'backswing keeps its twenty-eight degree reach');
+      assert.ok(trailingPitch < -15 && trailingPitch >= -17.01, 'backswing reaches up to seventeen degrees');
     }
   }
 });

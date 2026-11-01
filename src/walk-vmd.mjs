@@ -27,6 +27,24 @@ const smooth = t => t * t * (3 - 2*t);
 const fractional = x => x - Math.floor(x);
 const TRAIL_BIAS = 0.18; // Shift the stride behind the pelvis without changing stance speed.
 
+export function walkArmPitchAt(swing) {
+  const pitch = swing > 0
+    ? 8 + 9 * (1 - (1 - swing) ** (28 / 9))
+    : 8 + 28 * swing + 3 * swing ** 2;
+  const magnitude = Math.abs(pitch);
+  const speed = 0.8;
+  // Map the old angle to the new angle with slope 0.8 wherever the output
+  // is 10..17 degrees. This slows both approach and return, at both ends.
+  // Keep the extrema and cycle timing; smoothly make up time in the middle.
+  const boundary = (10 - 17 * (1 - speed)) / speed;
+  const average = 10 / boundary;
+  const cubic = (speed - average) / 2;
+  const eased = magnitude >= boundary
+    ? 17 - speed * (17 - magnitude)
+    : magnitude * (average - cubic + cubic * (magnitude / boundary) ** 2);
+  return Math.sign(pitch) * eased * DEG;
+}
+
 export function walkFootAt(phase, stride, lift, direction = 1) {
   const p = fractional(phase);
   if (p < WALK_STANCE) {
@@ -103,6 +121,21 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     return quaternionMultiply(footHeading, QX(pitch));
   }
   const frames = [];
+  const availableBones = new Set(boneNames);
+  const handPose = [];
+  for (const [side, mirror] of [['左', 1], ['右', -1]]) {
+    for (const finger of ['親指', '人指', '中指', '薬指', '小指']) {
+      const thumb = finger === '親指';
+      const joints = thumb ? [0, 1, 2] : [1, 2, 3];
+      const angles = thumb ? [8, 15, 18] : [20, 30, 20];
+      for (let i = 0; i < joints.length; i++) {
+        const digit = String(joints[i]);
+        const name = [side + finger + String.fromCharCode(0xff10 + joints[i]), side + finger + digit]
+          .find(candidate => availableBones.has(candidate));
+        if (name) handPose.push({ name, rotation: (thumb && i === 0 ? QY : QZ)(-mirror * angles[i] * DEG) });
+      }
+    }
+  }
   function key(role, frame, rotation = id, position = [0,0,0]) {
     if (bones[role]) frames.push({ name: bones[role], frame, rotation, position });
   }
@@ -110,6 +143,8 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
   // Keys at frame 0 and 36 match; the native window is advanced at the exact
   // stance speed so the planted foot remains approximately fixed in space.
   for (let frame = 0; frame <= WALK_FRAMES; frame += 2) {
+    // A constant, gentle curl rather than a clenched fist or rhythmic grip.
+    for (const pose of handPose) frames.push({ ...pose, frame, position: [0, 0, 0] });
     const phase = frame / WALK_FRAMES;
     const left = walkFootAt(phase, stride, lift, sign);
     const right = walkFootAt(phase + 0.5, stride, lift, sign);
@@ -135,14 +170,14 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     const hipTwist = 8 * Math.max(-1, Math.min(1,
       (left.x - right.x) * sign * (2 * WALK_STANCE) / stride));
     key('hip', frame, quaternionMultiply(QY((-sign * 90 + hipTwist) * DEG), QZ(1.8 * DEG * cycle)));
-    // Bring the leading arm's shoulder forwards with a visible +/-20 degree
-    // torso twist, using the arm phase rather than an unrelated sine wave.
-    const torsoTwist = 20 * armSwing;
-    key('upper', frame, quaternionMultiply(QY((-sign * 78 + torsoTwist) * DEG), QZ(-2.5 * DEG * cycle)));
-    // Counter the change from the previous chest yaw to keep the face steady.
+    // Face along travel, with a +/-10 degree twist following the leading arm.
+    const torsoTwist = 10 * armSwing;
+    key('upper', frame, quaternionMultiply(QY((-sign * 90 + torsoTwist) * DEG), QZ(-2.5 * DEG * cycle)));
+    // Keep the face 20 degrees toward the camera, countering the torso twist
+    // and preserving the existing small head sway.
     // TODO: When a model without an upper-body bone is available, recheck whether
     // the neck counter-rotation acts alone. Do not change behavior until verified.
-    key('neck', frame, QY((sign * 8 - 1.5 * cycle - torsoTwist) * DEG));
+    key('neck', frame, QY((sign * 20 - 1.5 * cycle - torsoTwist) * DEG));
     // Groove moves the torso/leg roots, not the independent planted IK
     // targets. Model-local +Z is the left support side after the hip yaw;
     // mirror it with travel direction. Do not add fore/aft (X) drift.
@@ -156,15 +191,11 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     // existing idle motion so hands are less likely to cut through clothing.
     // Torso yaw already handles travel direction; local arm swing must not
     // reverse again when walking left. Standard MMD elbows bend about Y.
-    // Keep the 8-degree bias and the approved 28-degree backswing. Ease the
-    // forward side to a 17-degree maximum without overshoot. Its slope at
-    // zero matches the backswing (28), keeping the crossover smooth.
-    // Left/right remain half a cycle apart, opposite their legs.
-    const armPitch = swing => (swing > 0
-      ? 8 + 9 * (1 - (1 - swing) ** (28 / 9))
-      : 8 + 28 * swing - 8 * swing ** 2) * DEG;
-    key('leftArm', frame, quaternionMultiply(QX(armPitch(armSwing)), QZ(-50 * DEG)));
-    key('rightArm', frame, quaternionMultiply(QX(armPitch(-armSwing)), QZ(50 * DEG)));
+    // Retain +/-17-degree reach and soften the outer zone in both directions.
+    // Left/right remain half a cycle apart, opposite their legs; the shoulder
+    // curves join smoothly and keep the original cycle and reversal times.
+    key('leftArm', frame, quaternionMultiply(QX(walkArmPitchAt(armSwing)), QZ(-50 * DEG)));
+    key('rightArm', frame, quaternionMultiply(QX(walkArmPitchAt(-armSwing)), QZ(50 * DEG)));
     // Rest forearms point along +X on the left and -X on the right: mirrored
     // Y rotations bend both hands forwards (-Z), rather than behind the hips.
     key('leftElbow', frame, QY((18 + 7 * armSwing) * DEG));
