@@ -1,6 +1,6 @@
 // Motion Lab: capture the actual Babylon/WebGL body at deterministic VMD
 // frames. Never include the rest of the desktop in screenshots.
-import { buildWalkingVmd, walkFootAt, WALK_FRAMES } from './walk-vmd.mjs';
+import { buildWalkingVmd, walkFootAt, WALK_FRAMES, walkBoneRestPositions } from './walk-vmd.mjs';
 import { LAB_FRAMES, LAB_DIRECTIONS, LAB_VIEWS, LAB_TARGET_HEIGHT_SHARE,
   labZoomForBounds, labCameraAlpha, labFileName, labSheetName } from './motion-lab.mjs';
 
@@ -138,7 +138,7 @@ export async function captureWalkingReview({
     camera.beta = Math.PI / 2;
     camera.fov = LAB_CAMERA_FOV;
     for (const direction of LAB_DIRECTIONS) {
-      const result = buildWalkingVmd({ boneNames, modelHeight, direction });
+      const result = buildWalkingVmd({ boneNames, boneRestPositions: walkBoneRestPositions(model.runtimeBones), modelHeight, direction });
       const animation = await loader.loadFromBufferAsync(
         direction === -1 ? 'FRAME motion lab left' : 'FRAME motion lab right', result.buffer);
       const handle = model.createRuntimeAnimation(animation);
@@ -199,6 +199,11 @@ export async function captureWalkingReview({
           const lift = modelHeight * 0.025;
           const leftFoot = walkFootAt(phase, result.stride, lift, direction);
           const rightFoot = walkFootAt(phase + 0.5, result.stride, lift, direction);
+          // Include the rest-stance correction in the recorded IK displacement.
+          leftFoot.x += result.footOffsets.left[0];
+          leftFoot.z = result.footOffsets.left[1];
+          rightFoot.x += result.footOffsets.right[0];
+          rightFoot.z = result.footOffsets.right[1];
           const note = 'L:' + (leftFoot.planted ? 'CONTACT' : 'SWING') +
             '    R:' + (rightFoot.planted ? 'CONTACT' : 'SWING');
           const shot = captureCanvas(canvas, baselineY, note);

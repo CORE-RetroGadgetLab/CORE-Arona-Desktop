@@ -71,7 +71,16 @@ test('walking chest and hips face the direction of travel while head stays sligh
     const neckYaw = yawDegrees(atStart('首').quat);
     const initialTwist = 20 * Math.sin(-2 * Math.PI * WALK_STANCE / 2);
     assert.ok(Math.abs(chestYaw + direction * 78 - initialTwist) < 0.2, 'chest follows arm phase with a larger twist');
-    assert.ok(Math.abs(hipYaw + direction * 90) < 0.2, 'hips face along travel');
+    assert.ok(Math.abs(hipYaw + direction * 90 - 8) < 0.2, 'left-leading pose twists the left hip forwards by eight degrees');
+    for (const hip of samples.filter(s => s.name === '下半身')) {
+      const phase = hip.frame / WALK_FRAMES;
+      const left = walkFootAt(phase, 1, 0, direction);
+      const right = walkFootAt(phase + 0.5, 1, 0, direction);
+      const footDifference = (left.x - right.x) * direction;
+      const twist = yawDegrees(hip.quat) + direction * 90;
+      assert.ok(twist * footDifference > 0, 'each hip follows its own leg forwards and backwards');
+      assert.ok(Math.abs(twist) <= 8.01, 'pelvis twist stays within eight degrees');
+    }
     for (const sample of samples.filter(s => s.name === '左足ＩＫ' || s.name === '右足ＩＫ')) {
       assert.ok(Math.abs(yawDegrees(sample.quat) + direction * 90) < 0.2,
         'both foot IK headings stay aligned with travel throughout the cycle');
@@ -140,7 +149,8 @@ test('arms oppose the ipsilateral foot without reversing local swing on a left t
       assert.ok(at('右ひじ').quat[1] < 0, 'right forearm bends forwards from -X');
       const armPitch = q => 2 * Math.atan2(q[0], q[3]) * 180 / Math.PI;
       const leadingArm = footForward > 0 ? at('右腕') : at('左腕');
-      assert.ok(armPitch(leadingArm.quat) > 30, 'opposite arm swings clearly in front');
+      const leadingPitch = armPitch(leadingArm.quat);
+      assert.ok(leadingPitch > 25 && leadingPitch <= 30.01, 'opposite arm swings forwards with a restrained reach');
     }
   }
 });
@@ -153,4 +163,44 @@ test('swing foot lifts and returns to its first position without discontinuity',
   const first=walkFootAt(0,stride,lift,-1), last=walkFootAt(1,stride,lift,-1);
   assert.deepEqual(first,last);
   assert.ok(walkFootAt(.75,stride,lift,1).y>0);
+});
+
+test('trailing foot stays behind longer and releases toe-down without changing contact speed', () => {
+  for (const direction of [-1, 1]) {
+    const stride = 2;
+    const start = walkFootAt(0, stride, 0.3, direction);
+    const release = walkFootAt(WALK_STANCE, stride, 0.3, direction);
+    assert.ok(-release.x * direction > start.x * direction, 'more reach behind than ahead');
+    assert.ok(walkFootAt(WALK_STANCE * 0.4, stride, 0.3, direction).x * direction < 0,
+      'foot passes behind the body earlier during stance');
+    const before = walkFootAt(WALK_STANCE - 1e-7, stride, 0.3, direction);
+    assert.ok(Math.abs(before.x - release.x) < 1e-6, 'release position is continuous');
+    const samples = extractVmd(buildWalkingVmd({ boneNames: bones, direction }).buffer);
+    for (const sample of samples.filter(s => s.name === '左足ＩＫ' || s.name === '右足ＩＫ')) {
+      const phase = sample.frame / WALK_FRAMES + (sample.name === '右足ＩＫ' ? 0.5 : 0);
+      const p = phase % 1;
+      const pitch = 2 * Math.atan2(sample.quat[0], sample.quat[3]);
+      if (p < WALK_STANCE) assert.ok(Math.abs(pitch) < 1e-6, 'contact remains level');
+      else if (p < (1 + WALK_STANCE) / 2) assert.ok(pitch < 0, 'toe points down after release');
+      else assert.ok(pitch > 0, 'toe clears the ground before landing');
+    }
+  }
+});
+
+test('rest stance width does not give one leg more trailing reach than the other', () => {
+  const boneRestPositions = {
+    '左足ＩＫ': { x: 0.65, z: 0.26 },
+    '右足ＩＫ': { x: -0.65, z: 0.26 }
+  };
+  for (const direction of [-1, 1]) {
+    const samples = extractVmd(buildWalkingVmd({ boneNames: bones, boneRestPositions, direction }).buffer);
+    for (const left of samples.filter(s => s.name === '左足ＩＫ' && s.frame < WALK_FRAMES)) {
+      const right = samples.find(s => s.name === '右足ＩＫ' && s.frame === (left.frame + WALK_FRAMES / 2) % WALK_FRAMES);
+      assert.ok(Math.abs((left.pos[0] + 0.65) - (right.pos[0] - 0.65)) < 1e-6,
+        'absolute fore/aft targets match half a cycle apart');
+      assert.ok(Math.abs(left.pos[1] - right.pos[1]) < 1e-6);
+      assert.ok(Math.abs(left.pos[2] + right.pos[2]) < 1e-6, 'stance width mirrors across the path');
+      for (let k = 0; k < 4; k++) assert.ok(Math.abs(left.quat[k] - right.quat[k]) < 1e-6);
+    }
+  }
 });

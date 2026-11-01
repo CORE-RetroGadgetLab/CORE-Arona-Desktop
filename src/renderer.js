@@ -2,7 +2,7 @@ import './style.css';
 import { rectanglesFromAlpha } from './silhouette.mjs';
 import { buildIdleVmd, IDLE_FRAMES } from './idle-vmd.mjs';
 import { captureWalkingReview } from './motion-lab-capture.mjs';
-import { WALK_FRAMES, buildWalkingVmd, walkTravelSpeed } from './walk-vmd.mjs';
+import { WALK_FRAMES, buildWalkingVmd, walkTravelSpeed, walkBoneRestPositions } from './walk-vmd.mjs';
 import { EmotionController } from './emotions.mjs';
 import { makeWebAudioBuffer } from './pcm-playback.mjs';
 import { LipSyncController, mouthLevelFromSamples } from './lip-sync.mjs';
@@ -704,6 +704,7 @@ async function startWalking(direction) {
         const height = bounds.max.y - bounds.min.y;
         const created = buildWalkingVmd({
           boneNames: model.runtimeBones.map(bone => bone.name),
+          boneRestPositions: walkBoneRestPositions(model.runtimeBones),
           modelHeight: height,
           direction
         });

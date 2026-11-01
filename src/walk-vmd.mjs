@@ -25,15 +25,17 @@ function quaternionMultiply(a,b) {
 }
 const smooth = t => t * t * (3 - 2*t);
 const fractional = x => x - Math.floor(x);
+const TRAIL_BIAS = 0.18; // Shift the stride behind the pelvis without changing stance speed.
 
 export function walkFootAt(phase, stride, lift, direction = 1) {
   const p = fractional(phase);
   if (p < WALK_STANCE) {
-    return { x: direction * stride * (0.5 - p / WALK_STANCE), y: 0, planted: true };
+    return { x: direction * stride * (0.5 - TRAIL_BIAS - p / WALK_STANCE), y: 0, planted: true };
   }
   const swing = (p - WALK_STANCE) / (1 - WALK_STANCE);
   return {
-    x: direction * stride * (-0.5 + smooth(swing)),
+    // A slightly later recovery lets the trailing leg finish extending.
+    x: direction * stride * (-0.5 - TRAIL_BIAS + smooth(swing) ** 1.35),
     y: lift * Math.sin(Math.PI * swing),
     planted: false
   };
@@ -61,7 +63,12 @@ export function resolveWalkBones(boneNames) {
     [role, choices.find(name => names.has(name)) ?? null]));
 }
 
-export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 1 } = {}) {
+export function walkBoneRestPositions(runtimeBones) {
+  return Object.fromEntries(runtimeBones.map(bone => [bone.name,
+    bone.linkedBone.getAbsoluteInverseBindMatrix().clone().invert().getTranslation()]));
+}
+
+export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelHeight = 10, direction = 1 } = {}) {
   const bones = resolveWalkBones(boneNames);
   if (!bones.leftIK || !bones.rightIK) {
     throw new Error('歩行には左右の足IKボーンが必要です（PMXの足IKを確認してください）');
@@ -73,6 +80,28 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
   // Foot IK parents the toe IK on standard PMX rigs. Orient its local
   // forward (-Z) along travel as well as the pelvis, without moving targets.
   const footHeading = QY(-sign * 90 * DEG);
+  const restLeft = boneRestPositions[bones.leftIK];
+  const restRight = boneRestPositions[bones.rightIK];
+  function footOffset(rest) {
+    if (!restLeft || !restRight) return [0, 0];
+    const dx = rest.x - (restLeft.x + restRight.x) / 2;
+    const dz = rest.z - (restLeft.z + restRight.z) / 2;
+    // Rotate the rest stance width about its midpoint, just like the pelvis.
+    // Otherwise the original left/right X separation becomes a fore/aft
+    // stagger when walking sideways, giving one leg more trailing reach.
+    return [-sign * dz - dx, sign * dx - dz];
+  }
+  const leftOffset = footOffset(restLeft);
+  const rightOffset = footOffset(restRight);
+  function footRotation(phase) {
+    const p = fractional(phase);
+    if (p < WALK_STANCE) return footHeading;
+    const swing = (p - WALK_STANCE) / (1 - WALK_STANCE);
+    // Toe-down after release, then a small toe-up recovery before landing.
+    // Leave contact rotation level: no guessed toe pivot or stance IK drift.
+    const pitch = (swing < 0.5 ? -12 : 6) * Math.sin(TAU * swing) ** 2 * DEG;
+    return quaternionMultiply(footHeading, QX(pitch));
+  }
   const frames = [];
   function key(role, frame, rotation = id, position = [0,0,0]) {
     if (bones[role]) frames.push({ name: bones[role], frame, rotation, position });
@@ -84,8 +113,8 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     const phase = frame / WALK_FRAMES;
     const left = walkFootAt(phase, stride, lift, sign);
     const right = walkFootAt(phase + 0.5, stride, lift, sign);
-    key('leftIK', frame, footHeading, [left.x, left.y, 0]);
-    key('rightIK', frame, footHeading, [right.x, right.y, 0]);
+    key('leftIK', frame, footRotation(phase), [left.x + leftOffset[0], left.y, leftOffset[1]]);
+    key('rightIK', frame, footRotation(phase + 0.5), [right.x + rightOffset[0], right.y, rightOffset[1]]);
 
     const cycle = Math.sin(TAU * phase);
     // Lowest during load acceptance (middle of double support), highest
@@ -101,7 +130,11 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     // leaving FRAME's face pointed toward the viewer while its legs walked sideways.
     // Face the chest almost along the path; let the neck open just a little
     // toward the camera so the character stays readable from a desktop view.
-    key('hip', frame, quaternionMultiply(QY((-sign * 90 + 2 * cycle) * DEG), QZ(1.8 * DEG * cycle)));
+    // The leading leg brings its side of the pelvis forwards. Use the actual
+    // foot separation so the delayed swing recovery stays in phase as well.
+    const hipTwist = 8 * Math.max(-1, Math.min(1,
+      (left.x - right.x) * sign * (2 * WALK_STANCE) / stride));
+    key('hip', frame, quaternionMultiply(QY((-sign * 90 + hipTwist) * DEG), QZ(1.8 * DEG * cycle)));
     // Bring the leading arm's shoulder forwards with a visible +/-20 degree
     // torso twist, using the arm phase rather than an unrelated sine wave.
     const torsoTwist = 20 * armSwing;
@@ -124,8 +157,9 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     // Bias slightly forwards and widen the swing so the leading hand clears
     // the torso. Left/right remain half a cycle apart, opposite their legs.
     // Add up to 8 degrees only on the backswing, smoothly at the crossover.
-    // The approved forward half of the shoulder motion stays identical.
-    const armPitch = swing => (8 + 28 * swing - 8 * Math.min(0, swing) ** 2) * DEG;
+    // Ease the forward swing down by up to 6 degrees; keep the backswing.
+    const armPitch = swing => (8 + 28 * swing - 8 * Math.min(0, swing) ** 2
+      - 6 * Math.max(0, swing) ** 2) * DEG;
     key('leftArm', frame, quaternionMultiply(QX(armPitch(armSwing)), QZ(-50 * DEG)));
     key('rightArm', frame, quaternionMultiply(QX(armPitch(-armSwing)), QZ(50 * DEG)));
     // Rest forearms point along +X on the left and -X on the right: mirrored
@@ -133,5 +167,6 @@ export function buildWalkingVmd({ boneNames = [], modelHeight = 10, direction = 
     key('leftElbow', frame, QY((18 + 7 * armSwing) * DEG));
     key('rightElbow', frame, QY(-(18 - 7 * armSwing) * DEG));
   }
-  return { buffer: encodeGeneratedVmd(frames, [], 'FRAME Walk'), stride, frames: WALK_FRAMES, rig: bones };
+  return { buffer: encodeGeneratedVmd(frames, [], 'FRAME Walk'), stride, frames: WALK_FRAMES, rig: bones,
+    footOffsets: { left: leftOffset, right: rightOffset } };
 }
