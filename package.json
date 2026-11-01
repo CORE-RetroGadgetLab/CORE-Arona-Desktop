@@ -6,7 +6,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "build": "vite build",
-    "start": "npm run build && electron .",
+    "start": "node scripts/frame-dev-supervisor.cjs",
     "motion:lab:request": "node scripts/motion-lab-request.cjs",
     "motion:lab:repair": "node scripts/motion-lab-repair.cjs",
     "test": "node --test"

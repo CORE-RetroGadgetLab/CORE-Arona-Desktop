@@ -1123,9 +1123,22 @@ function openReferenceLab() {
     .catch(error => console.error('[FRAME Reference Lab] load failed:', error));
 }
 
-function restartDevelopmentFrame() {
+async function restartDevelopmentFrame() {
   if (app.isPackaged) throw new Error('再起動は開発版FRAME専用です');
   if (devRestartRequested) throw new Error('再起動はすでに要求されています');
+
+  // npm start now supervises the Electron child in the SAME terminal.
+  // Request a rebuild/relaunch after the normal FRAME shutdown animation.
+  const requestFile = process.env.FRAME_DEV_RESTART_REQUEST_FILE;
+  if (requestFile && path.isAbsolute(requestFile) &&
+      path.basename(requestFile) === 'restart.request') {
+    await fs.writeFile(requestFile, String(process.pid) + '\n', { flag: 'wx' });
+    devRestartRequested = true;
+    app.quit();
+    return '既存の npm start ターミナルで再ビルドして再起動します';
+  }
+
+  // Compatibility: a directly launched Electron process has no supervisor.
   const helper = path.join(app.getAppPath(), 'scripts', 'frame-dev-restart.cjs');
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
   const child = spawn(process.execPath,
