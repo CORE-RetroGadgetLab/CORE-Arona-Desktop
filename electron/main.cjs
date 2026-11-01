@@ -3,6 +3,7 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, screen, safeStorage, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { resolveAssetPath } = require('./asset-path.cjs');
 const { motionLabRoot, beginMotionLab, writeMotionLabImage, completeMotionLab,
   pruneMotionLabRuns, MOTION_LAB_KEEP_RUNS } = require('./motion-lab.cjs');
@@ -91,10 +92,10 @@ let motionFolderDialogOpen = false;
 let menuLayout = { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, zoom: 1 };
 let menuTextSize = DEFAULT_TEXT_SIZE;
 // Session-only navigation state. Closing FRAME clears this automatically.
-const MENU_TABS = ['home', 'motion', 'voice', 'emotion', 'status'];
+const MENU_TABS = ['dev', 'home', 'motion', 'voice', 'emotion', 'status'];
 const MENU_TAB_SET = new Set(MENU_TABS);
 let menuViewState = {
-  tab: 'home',
+  tab: 'dev',
   scroll: Object.fromEntries(MENU_TABS.map(tab => [tab, 0])),
   motionList: 0,
   voiceList: 0
@@ -114,6 +115,8 @@ let dragTimer = null;
 let dragStart = null;
 let walkTimer = null;
 let walkState = null;
+let devWalkDirection = 0;
+let devRestartRequested = false;
 let idleDiagnostics = 'モーションの読み込みを待っています';
 let motionLabSession = null;
 let motionLabTimeout = null;
@@ -674,20 +677,24 @@ function stopAvatarWalk(notify = false) {
   if (walkTimer !== null) clearInterval(walkTimer);
   walkTimer = null;
   walkState = null;
+  devWalkDirection = 0;
   if (notify && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('avatar:walk-stopped');
   }
 }
 
 function beginAvatarWalk(direction, speed) {
+  const continuous = devWalkDirection === direction;
   stopAvatarWalk();
+  if (continuous) devWalkDirection = direction;
   if (!mainWindow || mainWindow.isDestroyed() ||
       ![-1, 1].includes(direction) || !Number.isFinite(speed)) return;
   stopAvatarDrag();
   const actualSpeed = Math.max(20, Math.min(360, speed));
   const bounds = avatarBounds;
   if (!bounds) return;
-  walkState = { direction, speed: actualSpeed, x: bounds.x, last: performance.now() };
+  walkState = { direction, speed: actualSpeed, x: bounds.x,
+    last: performance.now(), continuous };
   walkTimer = setInterval(() => {
     const state = walkState;
     if (!state || !mainWindow || mainWindow.isDestroyed()) {
@@ -712,7 +719,15 @@ function beginAvatarWalk(direction, speed) {
     }
     if ((state.direction > 0 && state.x >= maximum) ||
         (state.direction < 0 && state.x <= minimum)) {
-      stopAvatarWalk(true); // Stop before the model would slide beyond the screen.
+      if (state.continuous) {
+        // Development observation loop: re-enter from the opposite edge,
+        // preserving direction and gait phase. Ordinary walks still stop.
+        state.x = state.direction > 0 ? minimum : maximum;
+        avatarBounds = { ...avatarBounds, x: Math.round(state.x) };
+        syncAvatarViewport();
+      } else {
+        stopAvatarWalk(true); // Preserve the original screen-edge behavior.
+      }
     }
   }, movementIntervalMs(renderFrameRate));
 }
@@ -882,6 +897,8 @@ function menuState() {
     modelName: currentModelFile ? path.basename(currentModelFile) : '未選択',
     textSize: menuTextSize,
     viewState: menuViewState,
+    developmentMode: !app.isPackaged,
+    devWalkDirection,
     motionStatus: idleDiagnostics.split('\n')[0],
     motionLabStatus,
     motionWarpEnabled,
@@ -1093,12 +1110,45 @@ function openReferenceLab() {
     .catch(error => console.error('[FRAME Reference Lab] load failed:', error));
 }
 
+function restartDevelopmentFrame() {
+  if (app.isPackaged) throw new Error('再起動は開発版FRAME専用です');
+  if (devRestartRequested) throw new Error('再起動はすでに要求されています');
+  const helper = path.join(app.getAppPath(), 'scripts', 'frame-dev-restart.cjs');
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+  const child = spawn(process.execPath,
+    [helper, String(process.pid), app.getAppPath(), app.getPath('userData')], {
+      cwd: app.getAppPath(), detached: true, stdio: 'ignore',
+      windowsHide: true, env
+    });
+  if (!child.pid) throw new Error('再起動処理を開始できませんでした');
+  child.unref();
+  devRestartRequested = true;
+  app.quit(); // Existing exit animation and VoiSona shutdown are preserved.
+  return 'FRAMEを終了し、最新コードで npm start を実行します';
+}
+
 async function executeMenuAction(action, value) {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('モデル画面がありません');
   if (motionLabSession && (action === 'model.change' || action.startsWith('motion.'))) {
     throw new Error('歩行撮影が終わってから操作してください');
   }
   switch (action) {
+    case 'dev.restart':
+      return restartDevelopmentFrame();
+    case 'dev.walkLeft':
+    case 'dev.walkRight': {
+      if (motionLabSession) throw new Error('歩行撮影中は歩行操作できません');
+      const direction = action === 'dev.walkLeft' ? -1 : 1;
+      devWalkDirection = direction;
+      if (walkState && walkState.direction === direction) walkState.continuous = true;
+      mainWindow.webContents.send('avatar:motion-command', { type: 'walk', direction });
+      return direction < 0 ? '左へ連続歩行中（画面端で反対側へ移動）' :
+        '右へ連続歩行中（画面端で反対側へ移動）';
+    }
+    case 'dev.walkStop':
+      stopAvatarWalk();
+      mainWindow.webContents.send('avatar:motion-command', { type: 'walk-stop' });
+      return '連続歩行を停止します';
     case 'diagnostic.motionCapture': {
       if (!currentModelFile) throw new Error('先にMMDモデルを読み込んでください');
       if (motionLabSession) throw new Error('歩行撮影はすでに実行中です');
@@ -1147,6 +1197,8 @@ async function executeMenuAction(action, value) {
       return 'VMDを送信しました: ' + motion.name;
     }
     case 'motion.walkLeft': case 'motion.walkRight':
+      devWalkDirection = 0;
+      if (walkState) walkState.continuous = false;
       mainWindow.webContents.send('avatar:motion-command', {
         type: 'walk', direction: action === 'motion.walkLeft' ? -1 : 1
       });
