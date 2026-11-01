@@ -91,7 +91,7 @@ h1 { margin: 5px 0 3px; color: #f5f5f7; font-size: calc(23px * var(--text-scale)
 .global-actions .row { min-height: 36px; padding: 7px 11px; }
 .tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(max-content,1fr));
+  grid-template-columns: repeat(6, minmax(max-content,1fr));
   overflow-x: auto;
   scrollbar-width: thin;
   gap: 2px;
@@ -213,6 +213,7 @@ h1 { margin: 5px 0 3px; color: #f5f5f7; font-size: calc(23px * var(--text-scale)
   transition: background-color .13s, border-color .13s;
 }
 .row:hover:not(:disabled) { background: #444448; border-color: rgba(255,255,255,.23); }
+.row.selected:not(:disabled) { background: var(--selection-blue); border-color: var(--action-border); color: #dceeff; }
 .row:active:not(:disabled) { background: #4b4b50; }
 .row:disabled { opacity: .42; cursor: not-allowed; }
 .row span:first-child { display: inline-block; min-width: 20px; text-align: center; font-size: 16px; }
