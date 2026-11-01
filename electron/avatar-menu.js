@@ -47,7 +47,7 @@ const menuPages = [...document.querySelectorAll('[data-page]')];
 const menuTabs = [...document.querySelectorAll('[data-tab]')];
 const pageScroll = Object.fromEntries(menuPages.map(page => [page.dataset.page, 0]));
 const nestedScroll = { motionList: 0, voiceList: 0 };
-let activeTab = 'home';
+let activeTab = 'dev';
 let viewReady = false;
 
 function saveCurrentPosition() {
@@ -133,6 +133,17 @@ function renderState(state) {
   document.getElementById('model-name').textContent = state.modelName || '未選択';
   document.getElementById('motion-status').textContent = state.motionStatus || '標準待機モーション';
   document.getElementById('motion-lab-status').textContent = state.motionLabStatus || '未撮影';
+  const restarting = document.getElementById('dev-restart');
+  restarting.disabled = !state.developmentMode;
+  restarting.title = state.developmentMode ? 'npm start をビルドから再実行' : '開発版FRAME専用です';
+  document.getElementById('dev-walk-status').textContent = state.devWalkDirection === -1
+    ? '左へ連続歩行中' : state.devWalkDirection === 1
+      ? '右へ連続歩行中' : '歩行停止中';
+  for (const button of document.querySelectorAll('#dev-walk-left, #dev-walk-right')) {
+    const selected = state.devWalkDirection === (button.id === 'dev-walk-left' ? -1 : 1);
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
   const library = state.motionLibrary || {};
   const entries = Array.isArray(library.entries) ? library.entries : [];
   const selected = entries.find(entry => entry.id === library.selectedId);
@@ -283,7 +294,8 @@ const keepOpen = new Set([
   'voice.autoStart', 'voice.autoHide', 'voice.appHide',
   'motion.folder', 'motion.refresh', 'motion.preview', 'motion.next',
   'motion.previous', 'motion.setIdle', 'motion.stop', 'motion.resetIdle', 'motion.warpToggle',
-  'motion.transition', 'render.fps'
+  'motion.transition', 'render.fps',
+  'dev.walkLeft', 'dev.walkRight', 'dev.walkStop'
 ]);
 async function runAction(action, value) {
   if (busy) return;
