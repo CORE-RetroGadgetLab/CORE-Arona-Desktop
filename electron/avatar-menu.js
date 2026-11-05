@@ -203,7 +203,7 @@ function renderState(state) {
   if (!entries.length) {
     const empty = document.createElement('p');
     empty.className = 'empty';
-    empty.textContent = 'VMDがありません。フォルダを指定してください。';
+    empty.textContent = 'モーションが見つかりません。VMDファイルを追加するか、フォルダを指定してください。';
     buttons.push(empty);
   }
   motionList.replaceChildren(...buttons);
