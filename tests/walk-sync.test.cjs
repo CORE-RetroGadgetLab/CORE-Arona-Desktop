@@ -22,16 +22,18 @@ test('non-sequential seeks and long suspended frame gaps do not jump the avatar'
 
 test('screen movement cancels planted IK displacement over a stance frame', async () => {
   const { WALK_SECONDS, WALK_STANCE, WALK_FRAMES: generatedFrames,
-    walkFootAt, walkTravelSpeed } = await import('../src/walk-vmd.mjs');
+    walkFootAt, walkTravelSpeed, walkGaitFromAngles } = await import('../src/walk-vmd.mjs');
   assert.equal(generatedFrames, WALK_FRAMES);
-  const stride = 1.6, pixelsPerUnit = 100;
+  const gait = walkGaitFromAngles();
+  const { stride } = gait;
+  const pixelsPerUnit = 100;
   const speed = walkTravelSpeed(stride, pixelsPerUnit);
   for (const direction of [-1, 1]) {
     const first = 4, deltaFrames = 0.5;
     const seconds = walkFrameSeconds(first, first + deltaFrames);
     const screenTravel = direction * speed * seconds;
-    const firstFoot = walkFootAt(first / WALK_FRAMES, stride, 0, direction);
-    const nextFoot = walkFootAt((first + deltaFrames) / WALK_FRAMES, stride, 0, direction);
+    const firstFoot = walkFootAt(first / WALK_FRAMES, gait, direction);
+    const nextFoot = walkFootAt((first + deltaFrames) / WALK_FRAMES, gait, direction);
     const footTravel = (nextFoot.x - firstFoot.x) * pixelsPerUnit;
     assert.ok(Math.abs(screenTravel + footTravel) < 1e-9);
   }

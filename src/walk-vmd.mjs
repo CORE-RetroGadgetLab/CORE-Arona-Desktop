@@ -6,7 +6,8 @@ import { encodeGeneratedVmd } from './idle-vmd.mjs';
 
 export const WALK_FRAMES = 36; // 1.2 seconds, two footsteps at 30 fps
 export const WALK_STANCE = 0.62;
-export const WALK_STRIDE_HEIGHT_RATIO = 0.095;
+export const WALK_LEG_FORWARD_DEGREES = 12;
+export const WALK_LEG_BACKWARD_DEGREES = 22;
 export const WALK_SECONDS = WALK_FRAMES / 30;
 
 const DEG = Math.PI / 180;
@@ -25,7 +26,6 @@ function quaternionMultiply(a,b) {
 }
 const smooth = t => t * t * (3 - 2*t);
 const fractional = x => x - Math.floor(x);
-const TRAIL_BIAS = 0.18; // Shift the stride behind the pelvis without changing stance speed.
 
 export function walkArmPitchAt(swing) {
   const pitch = swing > 0
@@ -45,22 +45,71 @@ export function walkArmPitchAt(swing) {
   return Math.sign(pitch) * eased * DEG;
 }
 
-export function walkFootAt(phase, stride, lift, direction = 1) {
+export function walkGaitFromAngles({ boneNames = [], boneRestPositions = {}, modelHeight = 10,
+  forwardDegrees = WALK_LEG_FORWARD_DEGREES, backwardDegrees = WALK_LEG_BACKWARD_DEGREES } = {}) {
+  if (![forwardDegrees, backwardDegrees].every(a => Number.isFinite(a) && a >= 0 && a <= 40) ||
+      forwardDegrees + backwardDegrees === 0) throw new RangeError('脚の角度は0〜40度で、前後の合計を0より大きくしてください');
+  const bones = resolveWalkBones(boneNames);
+  const height = Math.max(0.3, Math.min(1000, modelHeight));
+  const spans = [['左足', 'LeftLeg', 'LeftUpLeg'], ['右足', 'RightLeg', 'RightUpLeg']].map((names, index) => {
+    const hip = names.map(name => boneRestPositions[name]).find(Boolean);
+    const ankle = boneRestPositions[index === 0 ? bones.leftIK : bones.rightIK];
+    const span = hip?.y - ankle?.y;
+    return Number.isFinite(span) && span > 0 ? span : null;
+  });
+  // One shared span/speed during double support. The shorter leg determines
+  // reach on asymmetric rigs. Height is only a fallback if rest data is absent.
+  const measured = spans.filter(value => value !== null);
+  const legHeight = measured.length ? Math.min(...measured) : height * 0.23;
+  const forwardReach = legHeight * Math.tan(forwardDegrees * DEG);
+  const backwardReach = legHeight * Math.tan(backwardDegrees * DEG);
+  return { forwardDegrees, backwardDegrees, legHeight, forwardReach, backwardReach,
+    stride: forwardReach + backwardReach, lift: 0.5 * Math.min(height * 0.025, legHeight * 0.12),
+    legHeightSource: measured.length ? 'bone-rest' : 'height-fallback' };
+}
+
+export function walkFootAt(phase, gait, direction = 1) {
+  const { stride, lift, forwardReach, backwardReach, legHeight, forwardDegrees, backwardDegrees } = gait;
   const p = fractional(phase);
   if (p < WALK_STANCE) {
-    return { x: direction * stride * (0.5 - TRAIL_BIAS - p / WALK_STANCE), y: 0, planted: true };
+    return { x: direction * (forwardReach - stride * p / WALK_STANCE), y: 0, planted: true };
   }
   const swing = (p - WALK_STANCE) / (1 - WALK_STANCE);
+  const y = lift * Math.sin(Math.PI * swing);
+  const drop = legHeight - y;
+  // Bound the hip-to-support target angle while the knee/foot lifts as well.
+  const x = Math.max(-drop * Math.tan(backwardDegrees * DEG),
+    Math.min(drop * Math.tan(forwardDegrees * DEG), -backwardReach + stride * smooth(swing) ** 1.35));
   return {
     // A slightly later recovery lets the trailing leg finish extending.
-    x: direction * stride * (-0.5 - TRAIL_BIAS + smooth(swing) ** 1.35),
-    y: lift * Math.sin(Math.PI * swing),
+    x: direction * x,
+    y,
     planted: false
   };
 }
 
 export function walkTravelSpeed(stride, pixelsPerUnit) {
   return stride * pixelsPerUnit / (WALK_SECONDS * WALK_STANCE);
+}
+
+export function walkFootRollAt(phase, toeDistance, ankleHeight, gait = walkGaitFromAngles()) {
+  const { x } = walkFootAt(phase, gait);
+  // Follow the leg position on both strokes: heel up behind, sole level
+  // directly underneath, then toes up ahead. Zero slope at the middle and
+  // ends keeps the pitch smooth through passing, contact and release.
+  const degrees = x < 0
+    ? -25 * smooth(Math.min(1, -x / gait.backwardReach))
+    : 15 * smooth(gait.forwardReach > 0 ? Math.min(1, x / gait.forwardReach) : 0);
+  const pitch = degrees * DEG;
+  // Standard PMX toe IK gives the forefoot lever. Approximate the shorter
+  // heel lever conservatively; compensate rotation about the sole contact,
+  // not the ankle, so the original constant-speed support path is preserved.
+  const pivotZ = pitch < 0 ? -toeDistance : toeDistance * 0.35;
+  return {
+    pitch,
+    x: -ankleHeight * Math.sin(pitch) - pivotZ * (1 - Math.cos(pitch)),
+    y: ankleHeight * (Math.cos(pitch) - 1) + pivotZ * Math.sin(pitch)
+  };
 }
 
 const candidates = Object.freeze({
@@ -86,15 +135,16 @@ export function walkBoneRestPositions(runtimeBones) {
     bone.linkedBone.getAbsoluteInverseBindMatrix().clone().invert().getTranslation()]));
 }
 
-export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelHeight = 10, direction = 1 } = {}) {
+export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelHeight = 10, direction = 1,
+  forwardDegrees = WALK_LEG_FORWARD_DEGREES, backwardDegrees = WALK_LEG_BACKWARD_DEGREES } = {}) {
   const bones = resolveWalkBones(boneNames);
   if (!bones.leftIK || !bones.rightIK) {
     throw new Error('歩行には左右の足IKボーンが必要です（PMXの足IKを確認してください）');
   }
   const sign = direction === -1 ? -1 : 1;
   const height = Math.max(0.3, Math.min(1000, modelHeight));
-  const stride = height * WALK_STRIDE_HEIGHT_RATIO;
-  const lift = height * 0.025;
+  const gait = walkGaitFromAngles({ boneNames, boneRestPositions, modelHeight: height, forwardDegrees, backwardDegrees });
+  const { stride } = gait;
   // Foot IK parents the toe IK on standard PMX rigs. Orient its local
   // forward (-Z) along travel as well as the pelvis, without moving targets.
   const footHeading = QY(-sign * 90 * DEG);
@@ -111,15 +161,14 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
   }
   const leftOffset = footOffset(restLeft);
   const rightOffset = footOffset(restRight);
-  function footRotation(phase) {
-    const p = fractional(phase);
-    if (p < WALK_STANCE) return footHeading;
-    const swing = (p - WALK_STANCE) / (1 - WALK_STANCE);
-    // Toe-down after release, then a small toe-up recovery before landing.
-    // Leave contact rotation level: no guessed toe pivot or stance IK drift.
-    const pitch = (swing < 0.5 ? -12 : 6) * Math.sin(TAU * swing) ** 2 * DEG;
-    return quaternionMultiply(footHeading, QX(pitch));
+  function geometry(side, ankle) {
+    const toe = [side + 'つま先ＩＫ', side + 'つま先IK'].map(name => boneRestPositions[name]).find(Boolean);
+    return {
+      toeDistance: ankle && toe ? Math.abs(toe.z - ankle.z) : height * 0.022,
+      ankleHeight: ankle && toe ? Math.abs(ankle.y - toe.y) : height * 0.023
+    };
   }
+  const footGeometry = { left: geometry('左', restLeft), right: geometry('右', restRight) };
   const frames = [];
   const availableBones = new Set(boneNames);
   const handPose = [];
@@ -146,10 +195,16 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     // A constant, gentle curl rather than a clenched fist or rhythmic grip.
     for (const pose of handPose) frames.push({ ...pose, frame, position: [0, 0, 0] });
     const phase = frame / WALK_FRAMES;
-    const left = walkFootAt(phase, stride, lift, sign);
-    const right = walkFootAt(phase + 0.5, stride, lift, sign);
-    key('leftIK', frame, footRotation(phase), [left.x + leftOffset[0], left.y, leftOffset[1]]);
-    key('rightIK', frame, footRotation(phase + 0.5), [right.x + rightOffset[0], right.y, rightOffset[1]]);
+    const left = walkFootAt(phase, gait, sign);
+    const right = walkFootAt(phase + 0.5, gait, sign);
+    for (const [role, foot, offset, geometry, footPhase] of [
+      ['leftIK', left, leftOffset, footGeometry.left, phase],
+      ['rightIK', right, rightOffset, footGeometry.right, phase + 0.5]
+    ]) {
+      const roll = walkFootRollAt(footPhase, geometry.toeDistance, geometry.ankleHeight, gait);
+      key(role, frame, quaternionMultiply(footHeading, QX(roll.pitch)),
+        [foot.x + offset[0] + sign * roll.x, foot.y + roll.y, offset[1]]);
+    }
 
     const cycle = Math.sin(TAU * phase);
     // Lowest during load acceptance (middle of double support), highest
@@ -157,6 +212,14 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     // so IK can flex the knees instead of reaching above its rest height.
     const supportPhase = phase - (WALK_STANCE - 0.5) / 2;
     const doubleStep = Math.cos(2 * TAU * supportPhase);
+    // Let IK soften the knee bend near either end of a step by easing a
+    // little of the crouch, rather than rotating a planted shin off target.
+    // Keep at least 70% of the existing dip: no forced straight-knee pose.
+    const legEndWeight = Math.max(...[left, right].map(foot => {
+      const reach = foot.x * sign;
+      const limit = reach < 0 ? gait.backwardReach : gait.forwardReach;
+      return smooth(Math.max(0, Math.min(1, (Math.abs(reach) / Math.max(limit, 1e-8) - 0.6) / 0.4)));
+    }));
     // Stance runs from 0 to WALK_STANCE: the foot passes beneath the
     // body at its midpoint. Arms reverse at contact/toe-off, not midstance.
     const armSwing = Math.sin(TAU * (phase - WALK_STANCE / 2));
@@ -183,7 +246,7 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     // mirror it with travel direction. Do not add fore/aft (X) drift.
     key('groove', frame, id, [
       0,
-      -height * (0.003 + 0.003 * doubleStep),
+      -height * (0.003 + 0.003 * doubleStep) * (1 - 0.3 * legEndWeight),
       sign * height * 0.003 * Math.sin(TAU * supportPhase)
     ]);
 
@@ -202,5 +265,5 @@ export function buildWalkingVmd({ boneNames = [], boneRestPositions = {}, modelH
     key('rightElbow', frame, QY(-(18 - 7 * armSwing) * DEG));
   }
   return { buffer: encodeGeneratedVmd(frames, [], 'FRAME Walk'), stride, frames: WALK_FRAMES, rig: bones,
-    footOffsets: { left: leftOffset, right: rightOffset } };
+    footOffsets: { left: leftOffset, right: rightOffset }, footGeometry, gait };
 }

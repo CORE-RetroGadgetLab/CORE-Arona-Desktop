@@ -115,6 +115,12 @@ async function completeMotionLab(session, meta = {}) {
     applicationFps: Number.isFinite(meta.applicationFps) ? meta.applicationFps : null,
     modelHeight: Number.isFinite(meta.modelHeight) ? meta.modelHeight : null,
     stride: Number.isFinite(meta.stride) ? meta.stride : null,
+    gait: meta.gait && typeof meta.gait === 'object' ? {
+      ...Object.fromEntries(['forwardDegrees', 'backwardDegrees', 'legHeight',
+        'forwardReach', 'backwardReach', 'stride', 'lift'].map(key =>
+        [key, Number.isFinite(meta.gait[key]) ? meta.gait[key] : null])),
+      legHeightSource: cleanText(meta.gait.legHeightSource)
+    } : null,
     captureProfile: meta.captureProfile && typeof meta.captureProfile === 'object' ? {
       background: cleanText(meta.captureProfile.background || 'legacy / dark'),
       cameraFov: Number.isFinite(meta.captureProfile.cameraFov) ? meta.captureProfile.cameraFov : null,
@@ -152,7 +158,7 @@ async function completeMotionLab(session, meta = {}) {
     '3. ニュートラルグレー（#969AA4）の撮影背景で黒い靴／服と白い髪の輪郭を確認。画像上部の L/R CONTACT/SWING は生成IKの予定状態。', 
     '4. VISUAL BASELINE (F00) の破線は、その視点で最初に撮影したF00のモデル可視輪郭の最下端です。靴とほぼ揃いますが、床面や物理接地の測定ではありません。',
     '5. manifest.json の各コマ leftFoot/rightFoot の x / y / planted を照合。値はモデル空間であり、実際のスクリーン上の足滑り量ではありません。',
-    '6. ソース src/walk-vmd.mjs の WALK_STANCE / WALK_STRIDE_HEIGHT_RATIO / 回転クォータニオン / groove / 腕の振りを小さな単位で修正。',
+    '6. ソース src/walk-vmd.mjs の WALK_LEG_FORWARD_DEGREES / WALK_LEG_BACKWARD_DEGREES（脚の前後角度）/ WALK_STANCE / 回転クォータニオン / groove / 腕の振りを小さな単位で修正。脚の角度は基準姿勢の股関節から足元への線で、膝の屈曲角や靴の傾きとは別。',
     '7. 同じモデル・撮影条件で再撮影し、新旧の同方向・同視点・同フレームを比較。モデルの見た目が小さい場合は画像でなく撮影プロファイルの framingZoom と cameraRadius を確認。',
     '',
     '## 注意',

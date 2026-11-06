@@ -86,6 +86,7 @@ test('save accepts only bounded PNGs and persists local JSON/gallery/latest file
   await writeMotionLabImage(session,'sheet-left-front.png',tinyPng,{view:'front',direction:-1});
   const dest = await completeMotionLab(session,{
     modelName:'private-sample.pmx',modelHeight:15,stride:1.2,
+    gait:{forwardDegrees:8,backwardDegrees:16,legHeight:9,legHeightSource:'bone-rest'},
     captureProfile:{background:'#969AA4', cameraFov:0.7, cameraRadius:4.5,
       framingZoom:2.4, targetHeightShare:0.74, imageMaxWidth:960,
       imageMaxHeight:1440, fixedCameraBeta:Math.PI / 2,
@@ -96,6 +97,10 @@ test('save accepts only bounded PNGs and persists local JSON/gallery/latest file
   assert.equal(manifest.files.length,2);
   assert.equal(manifest.files[0].leftFoot.planted,true);
   assert.equal(manifest.modelName,'private-sample.pmx');
+  assert.equal(manifest.gait.forwardDegrees,8);
+  assert.equal(manifest.gait.backwardDegrees,16);
+  assert.equal(manifest.gait.legHeightSource,'bone-rest');
+  assert.equal(manifest.gait.forwardReach,null);
   assert.equal(manifest.captureProfile.background, '#969AA4');
   assert.equal(manifest.captureProfile.cameraFov, 0.7);
   assert.equal(manifest.captureProfile.cameraRadius, 4.5);

@@ -1,6 +1,6 @@
 // Motion Lab: capture the actual Babylon/WebGL body at deterministic VMD
 // frames. Never include the rest of the desktop in screenshots.
-import { buildWalkingVmd, walkFootAt, WALK_FRAMES, walkBoneRestPositions } from './walk-vmd.mjs';
+import { buildWalkingVmd, walkFootAt, walkFootRollAt, WALK_FRAMES, walkBoneRestPositions } from './walk-vmd.mjs';
 import { LAB_FRAMES, LAB_DIRECTIONS, LAB_VIEWS, LAB_TARGET_HEIGHT_SHARE,
   labZoomForBounds, labCameraAlpha, labFileName, labSheetName } from './motion-lab.mjs';
 
@@ -170,7 +170,7 @@ export async function captureWalkingReview({
       model.setRuntimeAnimation(handle);
       runtime.setManualAnimationDuration(WALK_FRAMES);
       metadata = {
-        modelHeight, stride: result.stride, bones: result.rig,
+        modelHeight, stride: result.stride, bones: result.rig, gait: result.gait,
         captureProfile: {
           background: LAB_BACKGROUND,
           cameraFov: LAB_CAMERA_FOV,
@@ -196,14 +196,20 @@ export async function captureWalkingReview({
           // lowest point and keep that pixel row fixed for all nine frames.
           if (index === 0) baselineY = measureSilhouette(canvas)?.bottom ?? null;
           const phase = frame / WALK_FRAMES;
-          const lift = modelHeight * 0.025;
-          const leftFoot = walkFootAt(phase, result.stride, lift, direction);
-          const rightFoot = walkFootAt(phase + 0.5, result.stride, lift, direction);
+          const leftFoot = walkFootAt(phase, result.gait, direction);
+          const rightFoot = walkFootAt(phase + 0.5, result.gait, direction);
           // Include the rest-stance correction in the recorded IK displacement.
           leftFoot.x += result.footOffsets.left[0];
           leftFoot.z = result.footOffsets.left[1];
           rightFoot.x += result.footOffsets.right[0];
           rightFoot.z = result.footOffsets.right[1];
+          for (const [foot, side, footPhase] of [[leftFoot, 'left', phase], [rightFoot, 'right', phase + 0.5]]) {
+            const geometry = result.footGeometry[side];
+            const roll = walkFootRollAt(footPhase, geometry.toeDistance, geometry.ankleHeight, result.gait);
+            foot.x += direction * roll.x;
+            foot.y += roll.y;
+            foot.pitch = roll.pitch;
+          }
           const note = 'L:' + (leftFoot.planted ? 'CONTACT' : 'SWING') +
             '    R:' + (rightFoot.planted ? 'CONTACT' : 'SWING');
           const shot = captureCanvas(canvas, baselineY, note);
